@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.streamlit/secrets.toml
+studio/.env
+_ref_emergent/
+screenshots/
+models/*.joblib
+.cursor/

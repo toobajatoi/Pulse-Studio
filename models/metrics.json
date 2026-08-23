@@ -1,0 +1,7 @@
+{
+  "gold_accuracy": 1.0,
+  "holdout_accuracy": 0.857,
+  "train_rows": 168,
+  "corpus_rows": 1512,
+  "dataset": "https://github.com/Atharvak19/Uber-Reviews-Sentimental-Analysis"
+}

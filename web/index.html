@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pulse · Design Companion</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="mark" aria-hidden="true"></span> Pulse</div>
+    <div class="top-actions">
+      <button class="ghost" type="button" id="notesBtn">Notes</button>
+      <button class="pill solid" type="button" id="studioBtn">Open studio</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <h1>Writes copy, layouts, and research with you</h1>
+    <a href="#studio">Learn more about designing with Pulse →</a>
+  </section>
+
+  <section class="stage" id="studio">
+    <div class="wash">
+      <div class="product">
+        <aside class="rail">
+          <div>
+            <h2>Pulse</h2>
+            <p>Brainstorms layouts. Writes UI copy. Summarizes usability notes.</p>
+          </div>
+          <nav id="nav"></nav>
+          <div class="filters">
+            <label>City
+              <select id="city"></select>
+            </label>
+            <label>Source
+              <select id="source"></select>
+            </label>
+          </div>
+          <p>Dummy dataset · 48 self-created ride-hailing notes. Voice from brand.careem.com</p>
+        </aside>
+        <main class="canvas">
+          <div class="canvas-head">
+            <div class="kicker">Pulse · Design Companion</div>
+            <h1 id="title"></h1>
+            <p id="lede"></p>
+          </div>
+          <div id="view"></div>
+        </main>
+      </div>
+      <div class="askbar-wrap">
+        <form class="askbar" id="askForm">
+          <input id="ask" placeholder="Ask Pulse about a theme" autocomplete="off" />
+          <button type="submit" aria-label="Send">↑</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <strong>Pulse</strong>
+    <span>Inspired by OpenAI, Retool, United Carriers, and Zaro — Careem-voiced, dummy data only.</span>
+  </footer>
+
+  <script src="data.js"></script>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

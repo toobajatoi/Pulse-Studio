@@ -6,7 +6,9 @@ Careem Challenge 2 — a Gemini-style studio that co-designs Careem screens (Rid
 
 ## Live
 
-The site deploys from this repo on [Vercel](https://vercel.com). Add these environment variables in the Vercel project (never commit them):
+**App:** [https://pulse-studio-ashen.vercel.app](https://pulse-studio-ashen.vercel.app)
+
+Deploys from this GitHub repo on Vercel. These environment variables are already set on the project (never commit them):
 
 - `GEMINI_API_KEY`
 - `GROQ_API_KEY`

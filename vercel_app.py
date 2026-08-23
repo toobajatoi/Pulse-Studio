@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+from pathlib import Path
 
 from screen_gen import converse
 from studio_brain import pick_direction, start_project
+
+ROOT = Path(__file__).resolve().parent
+STATIC_DIRS = [ROOT / "public", ROOT / "studio"]
+MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".txt": "text/plain; charset=utf-8",
+}
 
 
 async def _read_body(receive) -> dict:
@@ -17,6 +31,39 @@ async def _read_body(receive) -> dict:
         more = message.get("more_body", False)
     raw = b"".join(chunks) or b"{}"
     return json.loads(raw)
+
+
+def _static_file(url_path: str) -> Path | None:
+    name = url_path.lstrip("/") or "index.html"
+    if name.endswith("/"):
+        name += "index.html"
+    for folder in STATIC_DIRS:
+        if not folder.exists():
+            continue
+        target = (folder / name).resolve()
+        if folder.resolve() not in target.parents and target != folder.resolve():
+            continue
+        if target.is_file():
+            return target
+        index = folder / "index.html"
+        if name == "index.html" and index.is_file():
+            return index
+    return None
+
+
+async def _send_bytes(send, status: int, body: bytes, content_type: str) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                [b"content-type", content_type.encode()],
+                [b"access-control-allow-origin", b"*"],
+                [b"cache-control", b"no-store"],
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
 
 
 async def _send_json(send, status: int, payload: dict) -> None:
@@ -67,6 +114,11 @@ async def app(scope, receive, send):
                 await _send_json(send, 400, {"error": "Ask needs a question."})
                 return
             await _send_json(send, 200, converse(question, body.get("history") or [], body.get("dna") or {}))
+            return
+        static = _static_file(path)
+        if static and method == "GET":
+            content_type = MIME.get(static.suffix.lower()) or mimetypes.guess_type(static.name)[0] or "application/octet-stream"
+            await _send_bytes(send, 200, static.read_bytes(), content_type)
             return
         await _send_json(send, 404, {"error": "Not found."})
     except Exception as exc:

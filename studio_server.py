@@ -33,6 +33,12 @@ class Handler(SimpleHTTPRequestHandler):
                     self._json(200, start_project(brief, dna))
                 elif action == "pick":
                     self._json(200, pick_direction(brief, body.get("direction") or "B", body.get("combine"), dna))
+                elif action == "step":
+                    step = str(body.get("step") or "Home")
+                    product = brief.get("product") or "Careem"
+                    goal = brief.get("goal") or ""
+                    question = f"Design the {product} {step} screen. Journey context: {goal}"
+                    self._json(200, converse(question, body.get("history") or [], dna))
                 else:
                     self._json(400, {"error": "Unknown studio action."})
             except Exception as exc:

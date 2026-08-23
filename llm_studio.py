@@ -12,50 +12,79 @@ import requests
 
 ROOT = Path(__file__).resolve().parent
 SECRETS = ROOT / ".streamlit" / "secrets.toml"
-GEMINI_MODEL = "gemini-3.6-flash"
-GROQ_MODEL = "openai/gpt-oss-20b"
+OPENROUTER_MODELS = [
+    os.environ.get("OPENROUTER_MODEL") or "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemini-2.5-pro",
+]
+GEMINI_MODELS = [
+    os.environ.get("GEMINI_MODEL") or "gemini-3.1-pro-preview",
+    "gemini-3.6-flash",
+]
+GROQ_MODELS = [
+    os.environ.get("GROQ_MODEL") or "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+]
 
 SYSTEM = """You are Careem Studio, a senior product designer.
-Design real Careem screens (Rides, Food, Quik, Pay, Plus, Captain, Delivery).
+Design real Careem screens that look production-ready, not wireframes.
 Reply with JSON only. No markdown. No HTML.
 
 Schema:
 {
-  "reply": "2-4 short sentences, like ChatGPT, explaining the screen",
+  "reply": "2-4 short sentences explaining what you designed",
   "intent": "snake_case_name",
+  "design_system": {
+    "name": "Food Home",
+    "product": "Food",
+    "layout": "One line describing structure",
+    "tokens": {"primary": "#00E784", "text": "#1F1F1F", "radius": "16px"},
+    "typography": {"title": "22/28 Medium", "body": "14/20 Regular"},
+    "components": [{"name": "SearchField", "spec": "What it does on this screen"}],
+    "rules": ["Max 2 CTAs", "Fee before pay when relevant"]
+  },
   "screen": {
     "kind": "generic",
-    "label": "Home · Dubai",
+    "label": "Food · Dubai",
     "rtl": false,
-    "blocks": [
-      {"type":"hello","kicker":"Good evening, Tooba","title":"Home"},
-      {"type":"search","text":"Where to?"},
-      {"type":"pills","items":["Ride","Food","Pay"]},
-      {"type":"hero","label":"August earnings","value":"AED 186.40","meta":"+12% vs July","bars":[42,68,51,88]},
-      {"type":"stats","items":[{"n":"18","l":"Trips"},{"n":"AED 1,248","l":"Spent"}]},
-      {"type":"split","items":[{"n":"Rides","p":72},{"n":"Food","p":19}]},
-      {"type":"list","title":"Recent","items":[{"t":"Dubai Mall","s":"Today · AED 24.50"}]},
-      {"type":"note","text":"Optional helper"},
-      {"type":"map"},
-      {"type":"sheet","title":"Cancel this ride?","sub":"Dubai → Marina","fee":"AED 8 if you cancel now","feeNote":"Captain already accepted.","primary":"Keep this trip","secondary":"Cancel and pay AED 8"},
-      {"type":"cta","text":"Book Ride","style":"primary"},
-      {"type":"tabs","items":["Home","Activity","Pay","You"]}
-    ]
+    "blocks": []
   }
 }
 
-Rules:
-- ALWAYS include a complete screen that matches the prompt. Never omit the screen.
-- Riders are passengers. Captains are drivers. Rider "earnings" means spend + Plus cashback unless the prompt says captain or driver.
-- Home/dashboard: max 6 blocks. Checkout: max 6.
-- Accept-ride, in-trip, and cancel screens MUST be map + one sheet only. Put fare, pickup, drop-off, and both CTAs inside the sheet. Never stack hello, stats, hero, and sheet — the phone cannot scroll.
-- Pickup and drop-off MUST be real street addresses (e.g. "Dubai Mall, Financial Centre Rd"), never the word "Pickup" or a lone pin.
-- Always write the screen in English. The product has its own EN/AR toggle. Do not switch language unless the user only asked to change copy inside a field.
-- Careem light UI. Realistic UAE/KSA/Egypt copy and currency when relevant.
-- If the user asks Arabic, set rtl true and write Arabic copy.
-- Follow-ups edit the last screen instead of starting over.
-- Fee, fare, or earnings stay visible. No dark patterns.
-- Keep labels short.
+Block types — compose ONLY what the brief needs (5-10 blocks typical):
+- hello: {kicker, title}  strings only
+- location: {text}  string
+- search: {text}  string
+- pills or categories: {items:["Rides","Food"]}  items MUST be strings, never objects
+- offer: {text}  string promo, never a chart
+- section: {title}  string
+- restaurants: {title, items:[{name, rating, eta, from, dish, tag}]}  every card needs name, rating, eta, from
+- hero: {label, value, meta, bars?} ONLY earnings dashboards
+- stats / split: ONLY earnings dashboards
+- list: {title, items:[{t,s}]}  t and s are strings
+- map: {}
+- sheet: {title, sub, fee?, feeNote?, primary, secondary?}  all strings
+- captain: {name, rating, car, plate}  all strings
+- trip: {pickup, dest, fare, duration, distance, method}  duration like "24 min", distance like "12 km"
+- rating: {value: 5}
+- tips: {items:["AED 5","AED 10","AED 15"]}  strings only
+- totals: {rows:[{label,value}]}  strings
+- note: {text}
+- cta: {text, style?}  text is a short string like "Done" — never mix fare into the button
+- tabs: {items:["Home","Activity","Pay","You"]}  strings only
+
+Hard rules:
+- items[] for pills/categories/tabs/tips is ALWAYS an array of strings. Never {name,icon} objects.
+- Super App home: hello, search "Where to?", pills ["Rides","Food","Quik","Pay","Shops","Plus","Bike","Box"], offer, list of recent places, tabs.
+- Food search: search, categories as filter chips (strings), restaurants cards with rating+ETA+price. Do not use pills-as-objects.
+- Ride completed: hello with fare, trip (pickup/dest/fare/duration/distance/method), captain, rating, tips, ONE cta "Done". No sheet. No Pay button on top of the fare.
+- ALWAYS return blocks[] that fully match the user brief.
+- NEVER paste the user's prompt as a title. Never return a lone Continue button.
+- NEVER return an earnings dashboard unless the brief asks for earnings/monthly stats.
+- Promos use offer text, never bar charts.
+- Always write English. rtl false unless the user asked for Arabic.
+- Realistic UAE copy and AED. Keep labels short. Max 2 CTAs.
 - You co-design with a human. Adapt hard to their Design DNA. Mention what you adapted.
 - Also return:
   "critic": {"score": 90, "note": "one sentence vs Careem DNA + their style"},
@@ -73,21 +102,25 @@ def _keys() -> dict:
     keys = {
         "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
         "GROQ_API_KEY": os.environ.get("GROQ_API_KEY", ""),
+        "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY") or os.environ.get("NVIDIA_API_KEY", ""),
     }
-    if keys["GEMINI_API_KEY"] and keys["GROQ_API_KEY"]:
-        return keys
     if SECRETS.exists():
         local = tomllib.loads(SECRETS.read_text(encoding="utf-8"))
         keys["GEMINI_API_KEY"] = keys["GEMINI_API_KEY"] or str(local.get("GEMINI_API_KEY") or "")
         keys["GROQ_API_KEY"] = keys["GROQ_API_KEY"] or str(local.get("GROQ_API_KEY") or "")
+        keys["OPENROUTER_API_KEY"] = (
+            keys["OPENROUTER_API_KEY"]
+            or str(local.get("OPENROUTER_API_KEY") or "")
+            or str(local.get("NVIDIA_API_KEY") or "")
+        )
     return keys
 
 
 def _timeout() -> int:
     try:
-        return max(6, int(os.environ.get("LLM_TIMEOUT", "32")))
+        return max(12, int(os.environ.get("LLM_TIMEOUT", "48")))
     except ValueError:
-        return 32
+        return 48
 
 
 def _parse(text: str) -> dict:
@@ -99,12 +132,12 @@ def _parse(text: str) -> dict:
     return json.loads(match.group(0))
 
 
-def _gemini(prompt: str) -> str:
+def _gemini(prompt: str, model: str) -> str:
     key = _keys()["GEMINI_API_KEY"]
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
         "contents": [{"parts": [{"text": f"{SYSTEM}\n\n{prompt}"}]}],
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048, "responseMimeType": "application/json"},
+        "generationConfig": {"temperature": 0.25, "maxOutputTokens": 4096, "responseMimeType": "application/json"},
     }
     response = requests.post(
         url,
@@ -112,18 +145,56 @@ def _gemini(prompt: str) -> str:
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
         timeout=_timeout(),
     )
+    if response.status_code == 429:
+        raise RuntimeError("Gemini quota exceeded")
     response.raise_for_status()
     parts = response.json()["candidates"][0]["content"]["parts"]
     return "".join(p.get("text", "") for p in parts)
 
 
-def _groq(prompt: str) -> str:
+def _openrouter(prompt: str, model: str) -> str:
+    key = _keys()["OPENROUTER_API_KEY"]
+    if not key:
+        raise RuntimeError("OpenRouter key missing")
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8787",
+        "X-Title": "Pulse Studio",
+    }
+    body = {
+        "model": model,
+        "temperature": 0.25,
+        "max_tokens": 4096,
+        "messages": [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        json={**body, "response_format": {"type": "json_object"}},
+        headers=headers,
+        timeout=_timeout(),
+    )
+    if response.status_code >= 400:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            json=body,
+            headers=headers,
+            timeout=_timeout(),
+        )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+
+def _groq(prompt: str, model: str) -> str:
     key = _keys()["GROQ_API_KEY"]
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         json={
-            "model": GROQ_MODEL,
-            "temperature": 0.3,
+            "model": model,
+            "temperature": 0.25,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": SYSTEM},
@@ -146,9 +217,17 @@ def design(question: str, history: list | None = None, dna: dict | None = None) 
             bits.append(f"{role}: {row.get('content', '')}")
         prior = "Recent chat:\n" + "\n".join(bits) + "\n\n"
     style = json.dumps(dna or {}, ensure_ascii=False)
-    prompt = f"{prior}Design DNA (adapt to this human): {style}\nDesigner: {question}\nReturn the JSON schema now."
+    prompt = f"{prior}Design DNA (adapt to this human): {style}\nDesigner: {question}\nReturn production-quality Careem JSON now. items[] must be strings."
     errors = []
-    for name, fn in (("Gemini · 3.6 flash", _gemini), ("Groq · gpt-oss-20b", _groq)):
+    chain = []
+    if _keys().get("OPENROUTER_API_KEY"):
+        chain += [(f"NVIDIA · {model}", lambda p, m=model: _openrouter(p, m)) for model in OPENROUTER_MODELS]
+    chain += [(f"Gemini · {model}", lambda p, m=model: _gemini(p, m)) for model in GEMINI_MODELS]
+    chain += [(f"Groq · {model}", lambda p, m=model: _groq(p, m)) for model in GROQ_MODELS]
+    skip_gemini = False
+    for name, fn in chain:
+        if skip_gemini and name.startswith("Gemini"):
+            continue
         try:
             data = _parse(fn(prompt))
             if not isinstance(data, dict) or not data.get("screen"):
@@ -158,4 +237,6 @@ def design(question: str, history: list | None = None, dna: dict | None = None) 
             return data, name
         except Exception as exc:
             errors.append(f"{name}: {exc}")
+            if "quota exceeded" in str(exc).lower():
+                skip_gemini = True
     raise RuntimeError(" | ".join(errors))

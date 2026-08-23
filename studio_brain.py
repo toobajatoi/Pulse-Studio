@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import json
+
 from llm_studio import design
 from screen_gen import (
     _clean_screen,
-    accept_screen,
-    arriving_screen,
-    cancel_screen,
-    checkout_screen,
-    failed_screen,
+    _looks_like_wrong_template,
+    _screen_usable,
+    ensure_blocks,
     infer_screen_kind,
-    rider_home_earnings,
+    prompt_screen,
 )
 
 CAREEM_DNA = {
@@ -38,6 +38,152 @@ CAREEM_DNA = {
     ],
 }
 
+SCREEN_DESIGN_SYSTEM = {
+    "food": {
+        "name": "Food Home",
+        "product": "Food",
+        "layout": "Location → search → category chips → offer → restaurant sections",
+        "tokens": {"primary": "#00E784", "forest": "#06281F", "text": "#1F1F1F", "muted": "#5F6368", "card": "#FFFFFF", "radius": "16px", "grid": "8px"},
+        "typography": {"title": "22/28 Medium", "section": "18/24 Medium", "body": "14/20 Regular", "meta": "12/16 Regular"},
+        "components": [
+            {"name": "LocationChip", "spec": "Pin + delivery address · 44px tap"},
+            {"name": "SearchField", "spec": "Search restaurants or dishes · 48px"},
+            {"name": "CategoryChipRow", "spec": "Horizontal scroll categories"},
+            {"name": "OfferBanner", "spec": "Promo line · brand-soft fill"},
+            {"name": "SectionHeader", "spec": "For you · Popular near you"},
+            {"name": "RestaurantCard", "spec": "Image · name · rating · ETA · from-price · dish"},
+            {"name": "TabBar", "spec": "Food · Search · Orders · You"},
+        ],
+        "rules": ["Rating + ETA on every card", "From-price on cards", "Fast scan · no fee on browse"],
+    },
+    "arriving": {
+        "name": "Driver Arriving",
+        "product": "Rides",
+        "layout": "Map 60% · bottom sheet · Call + Message",
+        "tokens": {"primary": "#00E784", "sheet": "#FFFFFF", "radius": "22px"},
+        "typography": {"captain": "14/20 Medium", "plate": "18/24 Bold"},
+        "components": [
+            {"name": "Map", "spec": "Route · fare · ETA chip"},
+            {"name": "CaptainRow", "spec": "Avatar · name · rating · car"},
+            {"name": "PlateChip", "spec": "License plate prominent"},
+            {"name": "Button/Primary", "spec": "Call"},
+            {"name": "Button/Secondary", "spec": "Message"},
+            {"name": "TextAction", "spec": "Cancel ride"},
+        ],
+        "rules": ["Max 2 primaries", "Cancel is text only"],
+    },
+    "accept": {
+        "name": "Accept Ride",
+        "product": "Rides",
+        "layout": "Radar map · offer sheet · Decline | Accept",
+        "tokens": {"primary": "#00E784", "offer": "#FFFFFF"},
+        "typography": {"fare": "18/24 Bold", "stops": "13/18 addresses"},
+        "components": [
+            {"name": "RadarMap", "spec": "Rings + car"},
+            {"name": "OfferSheet", "spec": "Fare · pickup · drop"},
+            {"name": "Button/Primary", "spec": "Accept"},
+            {"name": "Button/Ghost", "spec": "Decline"},
+        ],
+        "rules": ["Fare before Accept", "Real addresses"],
+    },
+    "cancel": {
+        "name": "Cancel Ride",
+        "product": "Rides",
+        "layout": "Map · sheet · fee · Keep | Cancel and pay",
+        "tokens": {"fee": "#137333"},
+        "typography": {"fee": "14/20 Bold"},
+        "components": [
+            {"name": "FeeBanner", "spec": "Fee before tap"},
+            {"name": "Button/Primary", "spec": "Keep this trip"},
+            {"name": "Button/Secondary", "spec": "Cancel and pay"},
+        ],
+        "rules": ["Fee visible before destructive tap"],
+    },
+    "failed": {
+        "name": "Payment Failed",
+        "product": "Pay",
+        "layout": "Alert · totals · Try again | Change payment",
+        "tokens": {"alert": "#EA4335"},
+        "typography": {"title": "22/28 Medium"},
+        "components": [
+            {"name": "TotalsBlock", "spec": "Amount + card visible"},
+            {"name": "Button/Primary", "spec": "Try Again"},
+            {"name": "Button/Secondary", "spec": "Change Payment"},
+        ],
+        "rules": ["Amount stays on screen"],
+    },
+    "checkout": {
+        "name": "Grocery Checkout",
+        "product": "Quik",
+        "layout": "Slot · items · fee row · Pay",
+        "tokens": {"fee": "#137333"},
+        "typography": {"total": "14/20 Bold"},
+        "components": [
+            {"name": "SlotPicker", "spec": "Delivery window"},
+            {"name": "FeeLine", "spec": "Delivery fee pre-pay"},
+            {"name": "Button/Primary", "spec": "Pay now"},
+        ],
+        "rules": ["Fee before Pay tap"],
+    },
+    "completed": {
+        "name": "Ride Completed",
+        "product": "Rides",
+        "layout": "Fare · route · payment · captain · stars · tips · Done",
+        "tokens": {"star": "#F4B400", "tip": "brand-soft"},
+        "typography": {"fare": "28/32 Medium"},
+        "components": [
+            {"name": "FareHero", "spec": "Final fare"},
+            {"name": "StarRating", "spec": "5 stars"},
+            {"name": "TipChips", "spec": "Optional amounts"},
+            {"name": "Button/Primary", "spec": "Done"},
+        ],
+        "rules": ["Fare before rating", "Tip optional"],
+    },
+    "home": {
+        "name": "Rider Home",
+        "product": "Rides",
+        "layout": "Where to · earnings · stats · tabs",
+        "tokens": {"hero": "#111", "careem": "#00E784"},
+        "typography": {"earned": "28/32"},
+        "components": [
+            {"name": "WhereTo", "spec": "Search rides"},
+            {"name": "EarningsCard", "spec": "Monthly total"},
+            {"name": "TabBar", "spec": "Home · Activity · Pay · You"},
+        ],
+        "rules": ["Where to above fold"],
+    },
+    "superapp": {
+        "name": "Super App Home",
+        "product": "Super App",
+        "layout": "Greeting → Where to → service grid → promo → recent",
+        "tokens": {"primary": "#00E784", "forest": "#06281F", "text": "#1F1F1F", "muted": "#5F6368", "card": "#FFFFFF", "radius": "16px", "grid": "8px"},
+        "typography": {"title": "22/28 Medium", "body": "14/20 Regular", "meta": "12/16 Regular"},
+        "components": [
+            {"name": "WhereTo", "spec": "Search destinations · 48px"},
+            {"name": "ServiceGrid", "spec": "Rides Food Quik Pay Shops"},
+            {"name": "OfferBanner", "spec": "Promo line · no charts"},
+            {"name": "ListRow", "spec": "Recent places"},
+            {"name": "TabBar", "spec": "Home · Activity · Pay · You"},
+        ],
+        "rules": ["Service tiles not grey pills", "Promo is a banner, never a graph", "Where to stays above the fold"],
+    },
+}
+
+
+def design_system_for(brief: dict) -> dict:
+    kind = infer_kind(brief)
+    base = SCREEN_DESIGN_SYSTEM.get(kind) or {
+        "name": "Careem Screen",
+        "product": brief.get("product") or "Careem",
+        "layout": CAREEM_DNA["layout"],
+        "tokens": {"primary": "#00E784", "radius": "16px"},
+        "typography": {"body": CAREEM_DNA["type"]},
+        "components": [{"name": c, "spec": "Careem primitive"} for c in CAREEM_DNA["components"][:6]],
+        "rules": CAREEM_DNA["patterns"],
+    }
+    return {**base, "kind": kind, "global": CAREEM_DNA}
+
+
 COMPONENT_MAP = {
     "hello": "Text/Title",
     "search": "WhereTo",
@@ -51,7 +197,79 @@ COMPONENT_MAP = {
     "sheet": "Sheet",
     "cta": "Button/Primary",
     "tabs": "TabBar",
+    "location": "LocationChip",
+    "offer": "OfferBanner",
+    "categories": "CategoryChipRow",
+    "section": "SectionHeader",
+    "restaurants": "RestaurantCard",
+    "captain": "CaptainRow",
+    "trip": "TripSummary",
+    "rating": "StarRating",
+    "tips": "TipChips",
+    "totals": "TotalsBlock",
 }
+
+
+def design_system_from_response(data: dict, brief: dict) -> dict:
+    ds = data.get("design_system")
+    if isinstance(ds, dict) and ds.get("components"):
+        return {**ds, "kind": infer_kind(brief), "global": CAREEM_DNA}
+    screen = _clean_screen(data.get("screen") or {}, _goal(brief), brief)
+    components = []
+    for block in screen.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        t = str(block.get("type") or "block")
+        components.append({"name": COMPONENT_MAP.get(t, t), "spec": f"`{t}` block on this generated screen"})
+    fallback = SCREEN_DESIGN_SYSTEM.get(infer_kind(brief), {})
+    return {
+        "name": (ds or {}).get("name") or fallback.get("name") or "Generated screen",
+        "product": brief.get("product") or fallback.get("product") or "Careem",
+        "layout": (ds or {}).get("layout") or fallback.get("layout") or CAREEM_DNA["layout"],
+        "tokens": (ds or {}).get("tokens") or fallback.get("tokens") or {"primary": "#00E784"},
+        "typography": (ds or {}).get("typography") or fallback.get("typography") or {"body": CAREEM_DNA["type"]},
+        "components": components or fallback.get("components") or [],
+        "rules": (ds or {}).get("rules") or fallback.get("rules") or CAREEM_DNA["patterns"],
+        "kind": infer_kind(brief),
+        "global": CAREEM_DNA,
+    }
+
+
+def _direction_prompt(brief: dict, direction_id: str, combine: str | None = None) -> str:
+    goal = _goal(brief)
+    label = combine or direction_id
+    names = {"A": "Fastest", "B": "Informative", "C": "Guided"}
+    hint = names.get(str(direction_id), direction_id)
+    return (
+        f"Project brief: {json.dumps(brief, ensure_ascii=False)}. "
+        f"Direction {label} ({hint}). "
+        f"Design the Careem screen as blocks[] plus design_system. "
+        f"Careem DNA: {CAREEM_DNA['patterns']}. "
+        f"Language: {brief.get('language') or 'EN'}. Write all UI copy in English unless language is AR. "
+        f"Set rtl true only when language is AR. "
+        f"Goal: {goal}"
+    )
+
+
+def _generate_with_llm(brief: dict, direction_id: str, combine: str | None, dna: dict | None) -> tuple[dict, str, str, dict]:
+    prompt = _direction_prompt(brief, direction_id, combine)
+    retry = (
+        f"{prompt} Return at least 4 meaningful blocks that match the goal. "
+        "Include design_system.components for every block type you use."
+    )
+    errors = []
+    for attempt, text in enumerate((prompt, retry)):
+        try:
+            data, model = design(text, [], dna)
+            screen = _clean_screen(data.get("screen") or {}, _goal(brief), brief)
+            if _screen_usable(screen) and not _looks_like_wrong_template(_goal(brief), screen):
+                ds = design_system_from_response(data, brief)
+                return screen, str(data.get("reply") or "Here is the screen."), model, ds
+            errors.append("model returned an unusable screen")
+        except Exception as exc:
+            errors.append(str(exc))
+    screen = ensure_blocks(prompt_screen(_goal(brief)), _goal(brief))
+    return screen, "Here is a working screen from your brief. Refine it in the composer.", "studio-fallback", design_system_for(brief)
 
 
 def _goal(brief: dict) -> str:
@@ -59,7 +277,13 @@ def _goal(brief: dict) -> str:
 
 
 def infer_kind(brief: dict) -> str:
-    return infer_screen_kind(f"{_goal(brief)} {brief.get('product', '')} {brief.get('mode', '')}")
+    product = str(brief.get("product") or "").strip().lower()
+    kind = infer_screen_kind(f"{_goal(brief)} {brief.get('product', '')} {brief.get('mode', '')}")
+    if product == "super app" and kind in ("food", "home", "generic"):
+        return "superapp"
+    if product == "food" and kind in ("home", "generic"):
+        return "food"
+    return kind
 
 
 def directions_for(brief: dict) -> list[dict]:
@@ -89,73 +313,35 @@ def directions_for(brief: dict) -> list[dict]:
             {"id": "B", "name": "Informative", "promise": "Fee, slot, and substitutions explained.", "note": "No surprise at the last step."},
             {"id": "C", "name": "Guided", "promise": "First-time grocery users get a walkthrough.", "note": "Confirm before a destructive change."},
         ]
+    if kind == "completed":
+        return [
+            {"id": "A", "name": "Fastest", "promise": "Fare, stars, and Done on one screen.", "note": "Tip stays optional."},
+            {"id": "B", "name": "Informative", "promise": "Route, payment, and captain before you rate.", "note": "Receipt stays one tap away."},
+            {"id": "C", "name": "Guided", "promise": "First-time riders see how tipping works.", "note": "Still max 2 primary actions."},
+        ]
+    if kind == "superapp":
+        return [
+            {"id": "A", "name": "Fastest", "promise": "Where to and the service grid on the first glance.", "note": "One tap into Rides or Food."},
+            {"id": "B", "name": "Informative", "promise": "Services, a promo, and recent places without hunting.", "note": "No charts on the home hub."},
+            {"id": "C", "name": "Guided", "promise": "New users see every Careem product and how to search.", "note": "Still max 2 CTAs."},
+        ]
+    if kind == "food":
+        return [
+            {"id": "A", "name": "Fastest", "promise": "Search and top picks above the fold.", "note": "Categories as one scroll row."},
+            {"id": "B", "name": "Informative", "promise": "Location, offers, ratings, ETA, and from-price on every card.", "note": "Popular dishes visible."},
+            {"id": "C", "name": "Guided", "promise": "New users see how delivery location and offers work.", "note": "Still scannable · no clutter."},
+        ]
+    if kind == "home":
+        return [
+            {"id": "A", "name": "Fastest", "promise": f"One-tap {product} from home.", "note": "Primary number on the first screen."},
+            {"id": "B", "name": "Informative", "promise": "Analytics and breakdown visible without hunting.", "note": "Where to stays above the fold."},
+            {"id": "C", "name": "Guided", "promise": "New users understand Plus cashback vs spend.", "note": "Helper copy, still max 2 CTAs."},
+        ]
     return [
-        {"id": "A", "name": "Fastest", "promise": f"One-tap {product} from home.", "note": "Primary number on the first screen."},
-        {"id": "B", "name": "Informative", "promise": "Analytics and breakdown visible without hunting.", "note": "Where to stays above the fold."},
-        {"id": "C", "name": "Guided", "promise": "New users understand Plus cashback vs spend.", "note": "Helper copy, still max 2 CTAs."},
+        {"id": "A", "name": "Fastest", "promise": "Only what the brief needs on screen.", "note": "Max 2 CTAs."},
+        {"id": "B", "name": "Informative", "promise": "Numbers and context before the tap.", "note": "Careem components only."},
+        {"id": "C", "name": "Guided", "promise": "Helper copy for first-time users.", "note": "Still one primary action."},
     ]
-
-
-def screen_for_direction(brief: dict, direction_id: str) -> dict:
-    kind = infer_kind(brief)
-    goal = _goal(brief)
-    if kind == "arriving":
-        screen = arriving_screen(goal)
-        screen["label"] = f"Arriving · { {'A': 'Fastest', 'B': 'Informative', 'C': 'Guided'}.get(direction_id, direction_id) }"
-        return screen
-    if kind == "failed":
-        screen = failed_screen(goal)
-        screen["label"] = f"Failed · {direction_id}"
-        return screen
-    if kind == "accept":
-        screen = accept_screen(goal)
-        if direction_id == "A":
-            screen["label"] = "Accept · Fastest"
-        elif direction_id == "C":
-            screen["label"] = "Accept · Guided"
-            screen["note"] = "Fare is locked before you accept."
-        else:
-            screen["label"] = "Accept · Informative"
-        return screen
-    if kind == "cancel":
-        screen = cancel_screen(goal)
-        if direction_id == "A":
-            screen["label"] = "Cancel · Fastest"
-            screen["note"] = ""
-        elif direction_id == "C":
-            screen["label"] = "Cancel · Guided"
-            screen["note"] = "You can undo this for 30 seconds."
-        else:
-            screen["label"] = "Cancel · Informative"
-            screen["note"] = "The captain already accepted, so a fee applies."
-        return screen
-    if kind == "checkout":
-        screen = checkout_screen(goal or "food checkout")
-        if direction_id == "A":
-            screen["secondary"] = ""
-            screen["label"] = "Checkout · Fastest"
-        elif direction_id == "C":
-            screen["feeNote"] = "New here? The fee is locked before Pay."
-            screen["label"] = "Checkout · Guided"
-        else:
-            screen["label"] = "Checkout · Informative"
-        return screen
-    screen = rider_home_earnings(goal or "rider home")
-    if direction_id == "A":
-        screen["label"] = "Home · Fastest"
-        screen["where"] = "Where to?"
-        screen["earned"] = ""
-        screen["weeks"] = []
-        screen["stats"] = []
-        screen["split"] = []
-        screen["trips"] = []
-        screen["cta"] = "Book a ride"
-    elif direction_id == "C":
-        screen["label"] = "Home · Guided"
-        screen["helper"] = "Plus cashback is already in this month’s total."
-    else:
-        screen["label"] = "Home · Informative"
-    return screen
 
 
 def critique_for(brief: dict, screen: dict | None) -> list[dict]:
@@ -180,6 +366,9 @@ def critique_for(brief: dict, screen: dict | None) -> list[dict]:
     if kind == "checkout":
         issues[0]["title"] = "Delivery fee appears only at the final step"
         issues[0]["why"] = "Showing it earlier may reduce checkout abandonment from unexpected pricing."
+    if kind == "food":
+        issues[0]["title"] = "Restaurant cards missing ETA or rating"
+        issues[0]["why"] = "Food browse needs trust signals before the user opens a restaurant."
     if kind == "cancel":
         issues.append(
             {
@@ -196,34 +385,102 @@ def critique_for(brief: dict, screen: dict | None) -> list[dict]:
 
 
 def flow_for(brief: dict) -> dict:
+    kind = infer_kind(brief)
     raw = brief.get("flow") or ""
-    if raw and "→" in raw:
+    custom = raw and "→" in raw and not raw.startswith("Home → Search → Slot")
+    if custom:
         steps = [p.strip() for p in raw.split("→") if p.strip()]
-    elif infer_kind(brief) == "checkout":
+    elif kind == "checkout":
         steps = ["Home", "Search", "Results", "Slot", "Checkout", "Payment", "Success"]
-    elif infer_kind(brief) == "arriving":
-        steps = ["Accepted", "Arriving", "Pickup", "Trip"]
-    elif infer_kind(brief) == "accept":
-        steps = ["Offer", "Accept sheet", "On the way"]
-    elif infer_kind(brief) == "failed":
-        steps = ["Checkout", "Pay", "Failed", "Retry"]
-    elif infer_kind(brief) == "cancel":
-        steps = ["In trip", "Cancel sheet", "Fee confirm", "Done"]
+    elif kind == "arriving":
+        steps = ["Accepted", "Arriving", "Pickup", "On trip"]
+    elif kind == "accept":
+        steps = ["Offer", "Accept", "Arriving"]
+    elif kind == "failed":
+        steps = ["Pay", "Failed", "Retry"]
+    elif kind == "cancel":
+        steps = ["On trip", "Cancel", "Fee confirm", "Done"]
+    elif kind == "completed":
+        steps = ["On trip", "Complete", "Rate", "Receipt"]
+    elif kind == "food":
+        steps = ["Food home", "Restaurant", "Cart", "Checkout", "Track"]
+    elif kind == "superapp":
+        steps = ["Home", "Service", "Search", "Book", "Track"]
     else:
-        steps = ["Home", "Search", "Match", "In trip", "Receipt"]
-    problems = [
-        {"flag": "No recovery route after payment failure.", "fix": "Generate Failed → Retry without losing the cart."},
-        {"flag": "User can lose context after a cancel.", "fix": "Keep the map and fare on the confirm sheet."},
-        {"flag": "Missing empty and Arabic states.", "fix": "Stress-test those before handoff."},
-    ]
-    if "Failed" not in steps and infer_kind(brief) == "checkout":
-        problems.insert(0, {"flag": "No payment-failed screen in the flow.", "fix": "Add Payment → Failed → Retry."})
-    return {"steps": steps, "problems": problems}
+        steps = ["Home", "Search", "Match", "On trip", "Receipt"]
+    problems = {
+        "arriving": [
+            {"flag": "Rider cannot find the car.", "fix": "Keep plate, color, and Call on this screen."},
+            {"flag": "Cancel is too easy to hit.", "fix": "Cancel stays a text action, not a second primary."},
+        ],
+        "accept": [
+            {"flag": "Fare hidden until after Accept.", "fix": "Show fare before the tap."},
+            {"flag": "Addresses look like pins only.", "fix": "Use street names, not the word Pickup."},
+        ],
+        "cancel": [
+            {"flag": "Fee appears after they tap.", "fix": "Fee stays on the sheet before Cancel and pay."},
+            {"flag": "No keep-ride path.", "fix": "Keep this trip is the primary."},
+        ],
+        "failed": [
+            {"flag": "Amount disappears on failure.", "fix": "Trip amount and card stay visible."},
+        ],
+        "checkout": [
+            {"flag": "Delivery fee only at the last tap.", "fix": "Lock the fee next to Pay."},
+            {"flag": "No recovery after payment fails.", "fix": "Add Failed → Retry without losing the cart."},
+        ],
+        "home": [
+            {"flag": "Where to is buried.", "fix": "Search stays one tap from open."},
+        ],
+        "completed": [
+            {"flag": "Fare hidden until after rating.", "fix": "Show the final fare before stars."},
+            {"flag": "Too many actions after the trip.", "fix": "Done plus receipt or home — not both as primaries."},
+        ],
+        "food": [
+            {"flag": "Restaurant cards missing ETA or rating.", "fix": "Every card shows ★ and delivery time."},
+            {"flag": "Delivery location buried.", "fix": "Pin + address stays at the top."},
+        ],
+        "superapp": [
+            {"flag": "Services look like leftover chips.", "fix": "Use a 4-column service grid with Careem tiles."},
+            {"flag": "Where to is buried under promos.", "fix": "Search stays at the top."},
+        ],
+    }.get(
+        kind,
+        [
+            {"flag": "No recovery route after a failure.", "fix": "Generate the missing failure states."},
+        ],
+    )
+    here = {
+        "arriving": "Arriving",
+        "accept": "Accept",
+        "cancel": "Cancel",
+        "failed": "Failed",
+        "checkout": "Checkout",
+        "home": "Home",
+        "completed": "Complete",
+        "food": "Food home",
+        "superapp": "Home",
+    }.get(kind, steps[0] if steps else "")
+    goal = _goal(brief).lower()
+    if kind == "food" and any(w in goal for w in ("cart", "checkout", "basket")):
+        here = "Cart"
+    elif kind == "food" and any(w in goal for w in ("search", "filter")):
+        here = "Restaurant" if "restaurant" in goal else "Food home"
+    return {"steps": steps, "problems": problems, "here": here}
 
 
 def tree_for(screen: dict) -> list[dict]:
     rows = [{"component": "Frame/Phone", "role": "screen"}]
-    if screen.get("kind") == "cancel" and not screen.get("blocks"):
+    kind = screen.get("kind")
+    if kind == "food":
+        return rows + [
+            {"component": "LocationChip", "role": "delivery"},
+            {"component": "SearchField", "role": "search"},
+            {"component": "CategoryChipRow", "role": "filters"},
+            {"component": "OfferBanner", "role": "promo"},
+            {"component": "RestaurantCard", "role": "list"},
+            {"component": "TabBar", "role": "nav"},
+        ]
+    if kind == "cancel" and not screen.get("blocks"):
         return rows + [
             {"component": "Map", "role": "context"},
             {"component": "Sheet", "role": "decision"},
@@ -244,7 +501,22 @@ def tree_for(screen: dict) -> list[dict]:
 
 def start_project(brief: dict, dna: dict | None = None) -> dict:
     dirs = directions_for(brief)
-    previews = {d["id"]: screen_for_direction(brief, d["id"]) for d in dirs}
+    previews = {}
+    model = "studio-brain"
+    ds = design_system_for(brief)
+    try:
+        data, model = design(_direction_prompt(brief, "B"), [], dna)
+        base = _clean_screen(data.get("screen") or {}, _goal(brief), brief)
+        if _screen_usable(base) and not _looks_like_wrong_template(_goal(brief), base):
+            ds = design_system_from_response(data, brief)
+            for d in dirs:
+                previews[d["id"]] = {**base, "label": f"{base.get('label', 'Careem')} · {d['name']}"}
+        else:
+            raise ValueError("Preview generation returned an unusable screen")
+    except Exception:
+        base = ensure_blocks(prompt_screen(_goal(brief)), _goal(brief))
+        for d in dirs:
+            previews[d["id"]] = {**base, "label": f"{base.get('label', 'Careem')} · {d['name']}"}
     return {
         "reply": "I read the brief and Careem DNA. Three directions — pick one, or combine A + C. Nothing ships until you choose.",
         "brief": brief,
@@ -252,44 +524,26 @@ def start_project(brief: dict, dna: dict | None = None) -> dict:
         "directions": dirs,
         "previews": previews,
         "flow": flow_for(brief),
+        "design_system": ds,
         "critic": {"score": 88, "note": "Directions stay inside Careem components and your Style Memory."},
         "issues": critique_for(brief, None),
-        "model": "studio-brain",
+        "model": model,
     }
 
 
 def pick_direction(brief: dict, direction_id: str, combine: str | None, dna: dict | None = None) -> dict:
     label = combine or direction_id
-    goal = _goal(brief)
-    prompt = (
-        f"Project brief: {brief}. Direction {label}. "
-        f"Co-design this Careem screen. Obey Careem DNA: {CAREEM_DNA['patterns']}. "
-        f"{goal}"
-    )
-    kind = infer_kind(brief)
-    reply = None
-    model = "studio-brain"
-    screen = {}
-    try:
-        data, model = design(prompt, [], dna)
-        screen = _clean_screen(data.get("screen") or {})
-        reply = data.get("reply")
-    except Exception:
-        reply = f"Direction {label} on Careem components. Edit the layers — I’ll notice."
-    if kind != "generic":
-        screen = screen_for_direction(brief, direction_id or "B")
-    elif not screen:
-        screen = screen_for_direction(brief, direction_id or "B")
-    screen["kind"] = kind if kind != "generic" else screen.get("kind") or "generic"
+    screen, reply, model, ds = _generate_with_llm(brief, direction_id or "B", combine, dna)
     screen["label"] = screen.get("label") or f"Direction {label}"
     return {
-        "reply": reply or f"Direction {label}. Edit anything. I only keep a preference if you say so.",
+        "reply": reply,
         "intent": f"direction_{label}",
         "screen": screen,
         "tree": tree_for(screen),
         "issues": critique_for(brief, screen),
         "flow": flow_for(brief),
-        "critic": {"score": 91, "note": f"Direction {label} · mapped to Careem components."},
+        "design_system": ds,
+        "critic": {"score": 91, "note": f"Direction {label} · generated from your brief."},
         "choices": [
             {"id": "learn", "label": "Learn this style"},
             {"id": "compact", "label": "Tighter spacing"},

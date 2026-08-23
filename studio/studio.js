@@ -168,10 +168,16 @@ const I18N = {
   en: {
     online: "Online",
     hey: (n) => `Hey! ${n} wants to ride with you`,
+    arriving: (n, eta) => `${n} is ${eta} away`,
     pickupPoint: "Pickup point",
     dropPoint: "Drop-off point",
     accept: "Accept",
     decline: "Decline",
+    call: "Call",
+    message: "Message",
+    cancelRide: "Cancel ride",
+    plate: "Plate",
+    rating: "Rating",
     keep: "Keep this trip",
     cancelQ: "Cancel this ride?",
     payCancel: (fee) => `Cancel and pay ${fee}`,
@@ -197,10 +203,16 @@ const I18N = {
   ar: {
     online: "متصل",
     hey: (n) => `هلا! ${n} يبي مشوار معك`,
+    arriving: (n, eta) => `${n} يبعد ${eta}`,
     pickupPoint: "نقطة الانطلاق",
     dropPoint: "نقطة الوصول",
     accept: "قبول",
     decline: "رفض",
+    call: "اتصال",
+    message: "رسالة",
+    cancelRide: "إلغاء المشوار",
+    plate: "اللوحة",
+    rating: "التقييم",
     keep: "خلّ المشوار",
     cancelQ: "تلغي المشوار؟",
     payCancel: (fee) => `ألغِ وادفع ${fee}`,
@@ -267,6 +279,11 @@ const AR_MAP = {
   "Accept Ride": "قبول المشوار",
   "Keep this trip": "خلّ المشوار",
   "Cancel this ride?": "تلغي المشوار؟",
+  "Cancel ride": "إلغاء المشوار",
+  Call: "اتصال",
+  Message: "رسالة",
+  Plate: "اللوحة",
+  "Captain is arriving": "الكابتن في الطريق",
   Pickup: "الانطلاق",
   "Pickup point": "نقطة الانطلاق",
   "Drop-off": "الوصول",
@@ -316,13 +333,16 @@ function looksLikeAddress(text) {
   return t.length > 4;
 }
 function screenKind(s) {
-  const blob = `${state.brief.goal || ""} ${s.kind || ""} ${s.label || ""}`.toLowerCase();
-  if (/accept|incoming|offer/.test(blob)) return "accept";
-  if (/cancel/.test(blob)) return "cancel";
-  if (/fail|try again/.test(blob)) return "failed";
-  if (/checkout|grocery|quik/.test(blob)) return "checkout";
-  if (s.kind === "accept" || s.kind === "cancel" || s.kind === "checkout" || s.kind === "failed") return s.kind;
-  return s.kind || "home";
+  const q = `${state.brief.goal || ""}`.toLowerCase();
+  const kind = (s && s.kind) || "";
+  if (/driver arriving|captain arriving|arriving screen|on the way|pickup progress|license plate|estimated arrival|vehicle details/.test(q) || kind === "arriving") return "arriving";
+  if (/accept ride|accept this ride|incoming ride|ride request/.test(q) || kind === "accept") return "accept";
+  if (/payment failed|try again|could not be processed/.test(q) || kind === "failed") return "failed";
+  if (/checkout|grocery|quik cart/.test(q) || kind === "checkout") return "checkout";
+  if (/monthly earnings|rider home|home dashboard/.test(q)) return "home";
+  if ((/cancel this ride|cancel ride screen|cancellation/.test(q) || kind === "cancel") && !/arriv|accept ride|payment failed/.test(q)) return "cancel";
+  if (s && s.blocks && s.blocks.length) return "generic";
+  return kind || "home";
 }
 function mergeAccept(s) {
   const blocks = s.blocks || [];
@@ -417,6 +437,37 @@ function renderTrip(s) {
 function renderCancel(s) {
   return renderTrip({ ...s, kind: "cancel" });
 }
+function renderArriving(raw) {
+  const t = loc();
+  const name = raw.captain || "Yousef";
+  const eta = raw.eta || "3 min";
+  const progress = Math.max(8, Math.min(100, Number(raw.progress) || 68));
+  return device(
+    `<div class="map"><div class="road"></div><div class="road b"></div><div class="pin a"></div><div class="pin b"></div><div class="fare">${esc(raw.fare || "")}</div><div class="eta-chip">${esc(eta)}</div></div>
+    <div class="sheet trip-sheet">
+      <div class="handle"></div>
+      <div class="offer-top">
+        <div class="who-row">
+          <span class="avatar">${esc(name[0])}</span>
+          <div><b>${esc(name)}</b><small>★ ${esc(raw.rating || "4.9")} · ${esc(tx(raw.car || "White Toyota Camry"))}</small></div>
+        </div>
+        <div class="price"><b>${esc(raw.plate || "")}</b><span>${t.plate}</span></div>
+      </div>
+      <p class="offer-hey">${esc(t.arriving(name, eta))}</p>
+      <div class="arrive-track"><i style="width:${progress}%"></i></div>
+      <div class="stops">
+        <div><i class="stop-dot"></i><div><small>${t.pickupPoint}</small><b>${esc(placeName(raw.pickup || "Dubai Mall, Financial Centre Rd"))}</b></div></div>
+      </div>
+      <div class="offer-acts">
+        <button class="primary" type="button">${t.call}</button>
+        <button class="ghost" type="button">${t.message}</button>
+      </div>
+      <button class="linkish" type="button">${t.cancelRide}</button>
+    </div>`,
+    raw.label || "Arriving",
+    state.lang === "ar"
+  );
+}
 function renderFailed(s) {
   const amount = s.fare || s.earned || s.amount || "AED 25.00";
   const method = s.method || s.card || "Visa **** 1234";
@@ -506,6 +557,7 @@ function renderDashboard(s) {
 function renderOne(s) {
   if (!s) return "";
   const kind = screenKind(s);
+  if (kind === "arriving") return renderArriving(s);
   if (kind === "accept") return renderAccept(s);
   if (kind === "cancel") return renderCancel(s);
   if (kind === "failed") return renderFailed(s);

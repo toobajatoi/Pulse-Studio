@@ -26,6 +26,35 @@ def _rtl(text: str) -> bool:
     return any(w in q for w in ("arabic", "rtl", "عربي"))
 
 
+def infer_screen_kind(text: str) -> str:
+    q = (text or "").lower()
+    if any(
+        p in q
+        for p in (
+            "driver arriving",
+            "captain arriving",
+            "arriving screen",
+            "on the way",
+            "pickup progress",
+            "license plate",
+            "estimated arrival",
+            "vehicle details",
+        )
+    ):
+        return "arriving"
+    if any(p in q for p in ("accept ride", "accept this ride", "incoming ride", "ride request", "new request")):
+        return "accept"
+    if any(p in q for p in ("payment failed", "try again", "could not be processed", "payment fail")):
+        return "failed"
+    if any(p in q for p in ("checkout", "grocery", "quik cart", "delivery fee")):
+        return "checkout"
+    if any(p in q for p in ("monthly earnings", "rider home", "home dashboard", "earnings home")):
+        return "home"
+    if any(p in q for p in ("cancel this ride", "cancel ride screen", "cancellation", "cancel the ride?")) or q.strip().startswith("cancel"):
+        return "cancel"
+    return "generic"
+
+
 def detect(question: str, history: list | None = None) -> str:
     q = question.lower()
     last = ""
@@ -34,19 +63,24 @@ def detect(question: str, history: list | None = None) -> str:
             if row.get("intent"):
                 last = row["intent"]
                 break
-    make = any(w in q for w in ("make", "create", "design", "build", "screen", "generate", "show me", "draw"))
-    if any(w in q for w in ("earn", "analytics", "dashboard", "monthly", "montly", "spending", "cashback")):
-        if any(w in q for w in ("captain", "driver")):
+    kind = infer_screen_kind(question)
+    if kind == "arriving":
+        return "arriving"
+    if kind == "accept":
+        return "accept"
+    if kind == "cancel":
+        return "cancel"
+    if kind == "failed":
+        return "failed"
+    if kind == "checkout":
+        return "food_home"
+    if kind == "home":
+        if any(w in q for w in ("captain", "driver")) and "arriv" not in q:
             return "captain_earnings"
         return "rider_home_earnings"
-    if any(w in q for w in ("accept", "incoming ride", "offer")):
-        return "accept"
-    if "cancel" in q:
-        return "cancel"
+    make = any(w in q for w in ("make", "create", "design", "build", "screen", "generate", "show me", "draw"))
     if any(w in q for w in ("food", "order", "restaurant")):
         return "food_home"
-    if make and any(w in q for w in ("home", "rider", "careem")):
-        return "rider_home_earnings"
     if last and not make and any(w in q for w in ("arabic", "rtl", "egypt", "ksa", "larger", "bigger")):
         return last
     return "rider_home_earnings" if make else "advice"
@@ -134,6 +168,44 @@ def captain_earnings(question: str) -> dict:
             ("Peak bonus", "Fri · 95", mk["cur"]),
         ],
         "tabs": ["Home", "Earnings", "Account"],
+    }
+
+
+def failed_screen(question: str) -> dict:
+    mk = MARKETS[_market(question)]
+    return {
+        "kind": "failed",
+        "title": "Payment failed",
+        "label": f"Failed · {mk['city']}",
+        "amount": f"{mk['cur']} 25.00" if mk["cur"] == "AED" else f"{mk['cur']} 28" if mk["cur"] == "SAR" else f"{mk['cur']} 145",
+        "method": "Visa **** 1234",
+        "primary": "Try Again",
+        "secondary": "Change Payment",
+    }
+
+
+def arriving_screen(question: str) -> dict:
+    mk = MARKETS[_market(question)]
+    captains = {"Dubai": ("Yousef", "RAK 48291"), "Riyadh": ("Fahad", "KSA 2201"), "Cairo": ("Omar", "CAI 908")}
+    name, plate = captains.get(mk["city"], captains["Dubai"])
+    dest = "Marina Walk, JBR" if mk["city"] == "Dubai" else "Olaya St" if mk["city"] == "Riyadh" else "Zamalek Bridge Rd"
+    return {
+        "kind": "arriving",
+        "title": "Captain is arriving",
+        "label": f"Arriving · {mk['city']}",
+        "rtl": False,
+        "captain": name,
+        "rating": "4.92",
+        "car": "White Toyota Camry",
+        "plate": plate,
+        "eta": "3 min",
+        "progress": 68,
+        "fare": f"{mk['cur']} 27.50" if mk["cur"] == "AED" else f"{mk['cur']} 28" if mk["cur"] == "SAR" else f"{mk['cur']} 145",
+        "pickup": f"{mk['city']} Mall, Financial Centre Rd" if mk["city"] == "Dubai" else dest,
+        "dest": dest,
+        "primary": "Call",
+        "secondary": "Message",
+        "tertiary": "Cancel ride",
     }
 
 
@@ -253,8 +325,10 @@ def food_home(question: str) -> dict:
 REPLIES = {
     "rider_home_earnings": "Here’s a Careem rider home with this month’s earnings on the first screen — cashback earned, money spent, and a weekly chart. Where to stays one tap away.",
     "captain_earnings": "Captain earnings home: monthly net, hours, and the last payouts. Peak bonus stays visible so the number is trusted.",
+    "arriving": "Captain arriving: name, rating, car, plate, and ETA on the map. Call or message first. Cancel stays secondary.",
     "accept": "Accept sheet on the map: pickup, drop-off, distance, time, and fare before they tap. Two actions only.",
     "cancel": "Cancel sheet with the fee before the tap. Riders see the rule while the map and fare stay on screen.",
+    "failed": "Payment failed with the trip amount and card still visible. Try Again is the only primary.",
     "food_home": "Food home with monthly spend analytics and a search field first — same Careem components as Rides.",
     "advice": None,
 }
@@ -283,6 +357,15 @@ def converse(question: str, history: list | None = None, dna: dict | None = None
     try:
         data, model = design(question, history, dna)
         screen = _clean_screen(data.get("screen") or {})
+        kind = infer_screen_kind(question)
+        if kind == "arriving":
+            screen = arriving_screen(question)
+        elif kind == "accept":
+            screen = accept_screen(question)
+        elif kind == "cancel":
+            screen = cancel_screen(question)
+        elif kind == "failed":
+            screen = failed_screen(question)
         critic = data.get("critic") if isinstance(data.get("critic"), dict) else {}
         choices = data.get("choices") if isinstance(data.get("choices"), list) else []
         return {
@@ -309,8 +392,10 @@ def converse(question: str, history: list | None = None, dna: dict | None = None
     builders = {
         "rider_home_earnings": rider_home_earnings,
         "captain_earnings": captain_earnings,
+        "arriving": arriving_screen,
         "accept": accept_screen,
         "cancel": cancel_screen,
+        "failed": failed_screen,
         "food_home": food_home,
     }
     if intent == "advice":

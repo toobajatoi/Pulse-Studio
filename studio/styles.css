@@ -91,6 +91,17 @@ body.gem {
   font-size: 18px; line-height: 1; cursor: pointer;
 }
 .hist-del:hover { background: #f1f3f4; color: #c5221f; }
+.eta-chip {
+  position: absolute; top: 44px; right: 12px;
+  background: #111; color: #fff; border-radius: 999px;
+  padding: 6px 10px; font-size: 12px; font-weight: 500;
+}
+.arrive-track { height: 6px; background: #e8eaed; border-radius: 99px; overflow: hidden; margin: 8px 0 10px; }
+.arrive-track i { display: block; height: 100%; background: var(--careem); }
+.linkish {
+  width: 100%; border: 0; background: transparent; color: #5f6368;
+  padding: 10px; font-size: 13px; font-weight: 500; cursor: pointer; margin-top: 2px;
+}
 .fail-mark {
   width: 44px; height: 44px; border-radius: 50%;
   background: #fce8e6; color: #c5221f;

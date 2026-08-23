@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 from llm_studio import design
-from screen_gen import _clean_screen, accept_screen, cancel_screen, checkout_screen, rider_home_earnings
+from screen_gen import (
+    _clean_screen,
+    accept_screen,
+    arriving_screen,
+    cancel_screen,
+    checkout_screen,
+    failed_screen,
+    infer_screen_kind,
+    rider_home_earnings,
+)
 
 CAREEM_DNA = {
     "system": "Careem",
@@ -50,21 +59,18 @@ def _goal(brief: dict) -> str:
 
 
 def infer_kind(brief: dict) -> str:
-    q = f"{_goal(brief)} {brief.get('product', '')} {brief.get('mode', '')}".lower()
-    if any(w in q for w in ("cancel", "cancell")):
-        return "cancel"
-    if any(w in q for w in ("accept", "incoming ride", "offer", "captain request")):
-        return "accept"
-    if any(w in q for w in ("grocery", "food", "checkout", "delivery", "quik", "cart")):
-        return "checkout"
-    if any(w in q for w in ("earn", "dashboard", "home", "analytics")):
-        return "home"
-    return "home"
+    return infer_screen_kind(f"{_goal(brief)} {brief.get('product', '')} {brief.get('mode', '')}")
 
 
 def directions_for(brief: dict) -> list[dict]:
     kind = infer_kind(brief)
     product = brief.get("product") or "Rides"
+    if kind == "arriving":
+        return [
+            {"id": "A", "name": "Fastest", "promise": "ETA and Call on the first glance.", "note": "Cancel stays a text action."},
+            {"id": "B", "name": "Informative", "promise": "Name, rating, car, and plate before they wait.", "note": "Pickup progress stays visible."},
+            {"id": "C", "name": "Guided", "promise": "New riders see arrival progress and how to reach the captain.", "note": "Still max 2 primary actions."},
+        ]
     if kind == "accept":
         return [
             {"id": "A", "name": "Fastest", "promise": "Fare and Accept on the first glance.", "note": "Map stays up. Two actions only."},
@@ -93,6 +99,14 @@ def directions_for(brief: dict) -> list[dict]:
 def screen_for_direction(brief: dict, direction_id: str) -> dict:
     kind = infer_kind(brief)
     goal = _goal(brief)
+    if kind == "arriving":
+        screen = arriving_screen(goal)
+        screen["label"] = f"Arriving · { {'A': 'Fastest', 'B': 'Informative', 'C': 'Guided'}.get(direction_id, direction_id) }"
+        return screen
+    if kind == "failed":
+        screen = failed_screen(goal)
+        screen["label"] = f"Failed · {direction_id}"
+        return screen
     if kind == "accept":
         screen = accept_screen(goal)
         if direction_id == "A":
@@ -187,8 +201,12 @@ def flow_for(brief: dict) -> dict:
         steps = [p.strip() for p in raw.split("→") if p.strip()]
     elif infer_kind(brief) == "checkout":
         steps = ["Home", "Search", "Results", "Slot", "Checkout", "Payment", "Success"]
+    elif infer_kind(brief) == "arriving":
+        steps = ["Accepted", "Arriving", "Pickup", "Trip"]
     elif infer_kind(brief) == "accept":
         steps = ["Offer", "Accept sheet", "On the way"]
+    elif infer_kind(brief) == "failed":
+        steps = ["Checkout", "Pay", "Failed", "Retry"]
     elif infer_kind(brief) == "cancel":
         steps = ["In trip", "Cancel sheet", "Fee confirm", "Done"]
     else:
@@ -248,14 +266,21 @@ def pick_direction(brief: dict, direction_id: str, combine: str | None, dna: dic
         f"Co-design this Careem screen. Obey Careem DNA: {CAREEM_DNA['patterns']}. "
         f"{goal}"
     )
+    kind = infer_kind(brief)
+    reply = None
+    model = "studio-brain"
+    screen = {}
     try:
         data, model = design(prompt, [], dna)
         screen = _clean_screen(data.get("screen") or {})
         reply = data.get("reply")
     except Exception:
-        screen = screen_for_direction(brief, direction_id or "B")
-        model = "studio-brain"
         reply = f"Direction {label} on Careem components. Edit the layers — I’ll notice."
+    if kind != "generic":
+        screen = screen_for_direction(brief, direction_id or "B")
+    elif not screen:
+        screen = screen_for_direction(brief, direction_id or "B")
+    screen["kind"] = kind if kind != "generic" else screen.get("kind") or "generic"
     screen["label"] = screen.get("label") or f"Direction {label}"
     return {
         "reply": reply or f"Direction {label}. Edit anything. I only keep a preference if you say so.",

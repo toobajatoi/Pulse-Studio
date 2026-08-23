@@ -141,6 +141,8 @@ function newChat() {
   state.view = "brief";
   const input = document.getElementById("askInput");
   if (input) input.value = "";
+  setDnaOpen(false);
+  setHistOpen(false);
   render();
 }
 function openChat(id) {
@@ -148,6 +150,7 @@ function openChat(id) {
   if (!item || !item.snap) return;
   Object.assign(state, item.snap);
   state.chatId = id;
+  setHistOpen(false);
   render();
 }
 function deleteChat(id) {
@@ -835,40 +838,104 @@ function slider(id, left, right, value) {
   return `<label class="slide"><span>${left}</span><input type="range" min="0" max="100" value="${value}" data-slide="${id}" style="--pct:${value}%" /><span>${right}</span></label>`;
 }
 
+const dnaAcc = { lean: true, traits: true, kept: false, locks: false };
+
+function accItem(id, title, value, body) {
+  const open = !!dnaAcc[id];
+  return `<section class="dna-acc-item${open ? " open" : ""}" data-acc="${id}">
+    <button type="button" class="dna-acc-btn" data-acc-toggle="${id}" aria-expanded="${open}">
+      <span>${title}</span>
+      ${value ? `<em>${esc(value)}</em>` : ""}
+      <i class="dna-chev" aria-hidden="true"></i>
+    </button>
+    <div class="dna-acc-body">${body}</div>
+  </section>`;
+}
+
 function dnaPanelHtml() {
   const pad = 10 + Math.round(state.dna.density / 8);
   const r = 8 + Math.round(state.dna.corners / 8);
-  return `
-    <div class="dna-swatch">
-      <div class="dna-card" style="border-radius:${r}px;padding:${pad}px 16px">
-        <small>Pulse will lean</small>
-        <b>${esc(labelOf(state.dna.density, "Tight", "Open"))} · ${esc(labelOf(state.dna.corners, "sharp", "soft"))}</b>
-        <span>${esc(labelOf(state.dna.copy, "Short copy", "Talky copy"))} · ${esc(labelOf(state.dna.interaction, "direct", "guided"))}</span>
-      </div>
-    </div>
-    ${DNA_TRAITS.map((t) => {
-      const v = Number(state.dna[t.id] || 0);
-      return `<div class="dna-trait">
-        <div class="dna-trait-top"><span>${t.name}</span><em>${esc(labelOf(v, t.left, t.right))}</em></div>
-        ${slider(t.id, t.left, t.right, v)}
-      </div>`;
-    }).join("")}
-    <h4>You kept</h4>
-    <p class="dna-hint">Drop a rule if Pulse learned the wrong thing.</p>
+  const lean = `${labelOf(state.dna.density, "Tight", "Open")} · ${labelOf(state.dna.corners, "sharp", "soft")}`;
+  const traits = DNA_TRAITS.map((t) => {
+    const v = Number(state.dna[t.id] || 0);
+    return `<div class="dna-trait">
+      <div class="dna-trait-top"><span>${t.name}</span><em>${esc(labelOf(v, t.left, t.right))}</em></div>
+      ${slider(t.id, t.left, t.right, v)}
+    </div>`;
+  }).join("");
+  const kept = `<p class="dna-hint">Drop a rule if Pulse learned the wrong thing.</p>
     <div class="dna-chips">${
       state.dna.observed.length
         ? state.dna.observed.map((n, i) => `<button type="button" class="dna-chip" data-obs-del="${i}">${esc(n)} <span aria-hidden="true">×</span></button>`).join("")
         : `<span class="dna-hint">Nothing extra yet.</span>`
-    }</div>
-    <h4>Locked Careem DNA</h4>
-    <div class="dna-locks"><span>8px grid</span><span>Bottom sheets</span><span>Max 2 CTAs</span><span>Fee before the tap</span></div>`;
+    }</div>`;
+  return `<div class="dna-acc">
+    ${accItem(
+      "lean",
+      "Pulse will lean",
+      lean,
+      `<div class="dna-swatch"><div class="dna-card" style="border-radius:${r}px;padding:${pad}px 16px">
+        <small>Pulse will lean</small>
+        <b>${esc(lean)}</b>
+        <span>${esc(labelOf(state.dna.copy, "Short copy", "Talky copy"))} · ${esc(labelOf(state.dna.interaction, "direct", "guided"))}</span>
+      </div></div>`
+    )}
+    ${accItem("traits", "Traits", `${DNA_TRAITS.length} sliders`, traits)}
+    ${accItem("kept", "You kept", state.dna.observed.length ? String(state.dna.observed.length) : "None", kept)}
+    ${accItem(
+      "locks",
+      "Locked Careem DNA",
+      "4 rules",
+      `<div class="dna-locks"><span>8px grid</span><span>Bottom sheets</span><span>Max 2 CTAs</span><span>Fee before the tap</span></div>`
+    )}
+  </div>`;
+}
+
+function isNarrow() {
+  return window.matchMedia("(max-width: 640px)").matches;
+}
+
+function isTabletNav() {
+  return window.matchMedia("(max-width: 1100px)").matches;
+}
+
+function askPlaceholder() {
+  if (state.screen) return isNarrow() ? "Change copy or layout…" : "Change the copy, spacing, or layout…";
+  return isNarrow() ? "Design a Careem screen" : "Ask Pulse to design a Careem screen";
+}
+
+function isDnaOpen() {
+  const drawer = document.getElementById("dnaDrawer");
+  return !!(drawer && drawer.classList.contains("open"));
+}
+
+function isHistOpen() {
+  return document.body.classList.contains("hist-open");
+}
+
+function setHistOpen(open) {
+  document.body.classList.toggle("hist-open", open);
+  const scrim = document.getElementById("histScrim");
+  const btn = document.getElementById("navToggle");
+  if (scrim) scrim.classList.toggle("open", open);
+  if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
 function setDnaOpen(open) {
+  if (open) setHistOpen(false);
   const drawer = document.getElementById("dnaDrawer");
   const scrim = document.getElementById("dnaScrim");
-  if (drawer) drawer.hidden = !open;
-  if (scrim) scrim.hidden = !open;
+  const chip = document.getElementById("dnaChip");
+  if (drawer) {
+    drawer.classList.toggle("open", open);
+    drawer.setAttribute("aria-hidden", open ? "false" : "true");
+  }
+  if (scrim) scrim.classList.toggle("open", open);
+  document.body.classList.toggle("dna-open", open);
+  if (chip) {
+    chip.classList.toggle("on", open);
+    chip.setAttribute("aria-expanded", open ? "true" : "false");
+  }
 }
 
 const FLOW_MAP = {
@@ -1588,7 +1655,7 @@ function setBusy(on, msg) {
   if (input) {
     input.disabled = on;
     if (msg) input.placeholder = msg;
-    if (!on) input.placeholder = state.screen ? "Change the copy, spacing, or layout…" : "Ask Pulse to design a Careem screen";
+    if (!on) input.placeholder = askPlaceholder();
   }
 }
 
@@ -1611,9 +1678,9 @@ function render() {
   paintDna();
   const chip = document.getElementById("dnaChip");
   if (chip) {
-    chip.textContent = `DNA · ${labelOf(state.dna.density, "dense", "spacious")}`;
-    const drawer = document.getElementById("dnaDrawer");
-    chip.classList.toggle("on", drawer && !drawer.hidden);
+    chip.textContent = isNarrow() ? "DNA" : `DNA · ${labelOf(state.dna.density, "dense", "spacious")}`;
+    chip.classList.toggle("on", isDnaOpen());
+    chip.setAttribute("aria-expanded", isDnaOpen() ? "true" : "false");
   }
   const tabFor = { directions: "navDirs", work: "navWork", flow: "navFlow", dna: "navDna" };
   document.querySelectorAll(".proj-tabs button").forEach((btn) => {
@@ -1628,7 +1695,7 @@ function render() {
   } else if (bar) bar.hidden = true;
   const input = document.getElementById("askInput");
   if (input && !state.thinking) {
-    input.placeholder = state.screen ? "Change the copy, spacing, or layout…" : "Ask Pulse to design a Careem screen";
+    input.placeholder = askPlaceholder();
   }
   paintHistory();
   const thread = app.querySelector(".gem-thread");
@@ -1639,6 +1706,7 @@ function render() {
 async function start(goal) {
   const text = (goal || document.getElementById("askInput").value || "").trim();
   if (!text || state.thinking) return;
+  setHistOpen(false);
   state.brief.language = state.lang === "ar" ? "AR" : "EN";
   inferBrief(text);
   state.lang = "en";
@@ -1737,18 +1805,31 @@ document.body.addEventListener("click", (e) => {
     openChat(chat.dataset.chat);
     return;
   }
+  if (e.target.id === "navToggle" || e.target.closest("#navToggle")) {
+    const next = !isHistOpen();
+    if (next) setDnaOpen(false);
+    setHistOpen(next);
+    return;
+  }
+  if (e.target.id === "histScrim") {
+    setHistOpen(false);
+    return;
+  }
   if (e.target.id === "dnaChip" || e.target.closest("#dnaChip")) {
-    const drawer = document.getElementById("dnaDrawer");
-    setDnaOpen(drawer ? drawer.hidden : true);
-    const dnaChip = document.getElementById("dnaChip");
-    const open = document.getElementById("dnaDrawer");
-    if (dnaChip) dnaChip.classList.toggle("on", open && !open.hidden);
+    setDnaOpen(!isDnaOpen());
     return;
   }
   if (e.target.id === "dnaClose" || e.target.id === "dnaScrim") {
     setDnaOpen(false);
-    const chipBtn = document.getElementById("dnaChip");
-    if (chipBtn) chipBtn.classList.remove("on");
+    return;
+  }
+  const acc = e.target.closest("[data-acc-toggle]");
+  if (acc) {
+    const id = acc.dataset.accToggle;
+    dnaAcc[id] = !dnaAcc[id];
+    const item = acc.closest(".dna-acc-item");
+    if (item) item.classList.toggle("open", dnaAcc[id]);
+    acc.setAttribute("aria-expanded", dnaAcc[id] ? "true" : "false");
     return;
   }
   const dropObs = e.target.closest("[data-obs-del]");
@@ -1768,6 +1849,7 @@ document.body.addEventListener("click", (e) => {
       }
     }
     setDnaOpen(false);
+    setHistOpen(false);
     state.view = nav[e.target.id];
     render();
     return;
@@ -1987,7 +2069,23 @@ document.getElementById("learnBar").addEventListener("click", (e) => {
   render();
 });
 
-window.addEventListener("resize", fitPhone);
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (isDnaOpen()) setDnaOpen(false);
+  else if (isHistOpen()) setHistOpen(false);
+});
+function onViewport() {
+  if (!isTabletNav()) setHistOpen(false);
+  const chip = document.getElementById("dnaChip");
+  if (chip && !state.thinking) {
+    chip.textContent = isNarrow() ? "DNA" : `DNA · ${labelOf(state.dna.density, "dense", "spacious")}`;
+  }
+  const input = document.getElementById("askInput");
+  if (input && !state.thinking) input.placeholder = askPlaceholder();
+  fitPhone();
+}
+window.addEventListener("resize", onViewport);
+if (window.visualViewport) window.visualViewport.addEventListener("resize", fitPhone);
 load();
 render();
 {

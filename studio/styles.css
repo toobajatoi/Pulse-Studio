@@ -18,14 +18,16 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+html, body { margin: 0; height: 100%; height: 100dvh; }
 body.gem {
   font-family: var(--body);
   color: var(--text);
   background: var(--bg);
   display: flex;
   overflow: hidden;
+  max-width: 100%;
 }
+button, input, select, textarea { touch-action: manipulation; }
 
 .mark {
   width: 18px; height: 18px; border-radius: 50%; flex: 0 0 18px;
@@ -121,13 +123,19 @@ body.gem {
 }
 .rail-btn:hover { background: #fff; color: var(--forest); }
 
-.workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
+.workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.hist-scrim { display: none; }
+.nav-toggle { display: none; }
 .gem-bar {
   height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 0 28px;
+  position: relative;
+  z-index: 40;
+  background: var(--bg);
 }
 .gem-brand {
   display: flex;
@@ -290,7 +298,7 @@ body.gem {
 }
 .hello {
   font-family: var(--display);
-  font-size: clamp(40px, 5.5vw, 56px);
+  font-size: clamp(32px, 6vw, 56px);
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1.1;
@@ -301,7 +309,7 @@ body.gem {
   color: transparent;
 }
 .gem-home {
-  min-height: calc(100vh - 220px);
+  min-height: calc(100dvh - 220px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -311,11 +319,13 @@ body.gem {
 }
 .gem-home .ideas { justify-content: center; max-width: 720px; }
 .prompt-group .hist-label { text-align: left; margin: 0 0 8px; width: 100%; }
-.proj-tabs { display: flex; gap: 4px; }
+.proj-tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+.proj-tabs::-webkit-scrollbar { display: none; }
 .proj-tabs[hidden] { display: none !important; }
 .proj-tabs button {
   border: 0; background: transparent; color: var(--muted);
   padding: 8px 12px; border-radius: 999px; font: 500 13px var(--body); cursor: pointer;
+  flex: 0 0 auto;
 }
 .proj-tabs button:hover, .proj-tabs button.on { background: var(--brand-soft); color: var(--forest); }
 .busy {
@@ -337,7 +347,6 @@ body.gem {
 }
 .busy p { margin: 14px 0 0; color: var(--muted); font-size: 14px; }
 .workspace { position: relative; }
-.composer { padding: 8px 8vw 18px; }
 .go.slim { padding: 10px 16px; font-size: 13px; width: auto; }
 .dir-art {
   height: 120px; border-radius: 16px; margin-bottom: 12px;
@@ -375,6 +384,7 @@ body.gem {
   font-size: 15px;
   line-height: 1.55;
   max-width: 80%;
+  overflow-wrap: anywhere;
 }
 .msg.assistant .bubble {
   background: transparent;
@@ -390,7 +400,7 @@ body.gem {
   gap: 6px;
 }
 
-.composer { padding: 8px 8vw 18px; }
+.composer { padding: 8px 8vw max(14px, env(safe-area-inset-bottom)); }
 .composer-box {
   max-width: 740px;
   margin: 0 auto;
@@ -760,7 +770,8 @@ body.gem {
 .flow-page .go { margin-top: 6px; }
 .learn-bar {
   position: sticky; bottom: 0; background: #111; color: #fff;
-  padding: 12px 18px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; z-index: 40;
+  padding: 12px 18px max(12px, env(safe-area-inset-bottom));
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; z-index: 40;
 }
 .learn-bar[hidden] { display: none !important; }
 .learn-bar button { border: 0; border-radius: 999px; padding: 7px 12px; font: 500 12px var(--body); cursor: pointer; }
@@ -1125,31 +1136,95 @@ body.gem {
 .ghost.full { width: 100%; margin-top: 8px; }
 .dna-scrim {
   position: absolute;
-  inset: 0;
-  background: rgba(6, 40, 31, .28);
+  inset: 64px 0 0;
+  background: rgba(6, 40, 31, .18);
   z-index: 28;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease;
 }
-.dna-scrim[hidden] { display: none !important; }
+.dna-scrim.open {
+  opacity: 1;
+  pointer-events: auto;
+}
 .dna-drawer {
   position: absolute;
-  top: 72px; right: 16px; bottom: auto;
-  width: min(380px, calc(100% - 32px));
-  max-height: calc(100% - 168px);
+  top: 64px;
+  right: 0;
+  bottom: 0;
+  width: min(400px, 100%);
   background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 22px;
-  box-shadow: 0 20px 50px rgba(6, 40, 31, .12);
+  border-left: 1px solid var(--line);
+  box-shadow: -18px 0 40px rgba(6, 40, 31, .08);
   z-index: 31;
-  padding: 20px 20px 22px;
+  padding: 20px 20px 28px;
   overflow: auto;
+  transform: translateX(100%);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform .28s cubic-bezier(.2, .8, .2, 1), visibility .28s;
 }
-.dna-drawer[hidden] { display: none !important; }
-.dna-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+.dna-drawer.open {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+}
+.dna-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin: -4px 0 8px;
+  position: sticky;
+  top: -20px;
+  background: #fff;
+  padding: 4px 0 12px;
+  z-index: 1;
+}
 .dna-head b { display: block; font-size: 18px; font-weight: 500; }
 .dna-head button {
   width: 32px; height: 32px; border: 0; background: #f3f6f4; border-radius: 50%;
   cursor: pointer; font-size: 16px; line-height: 1; color: var(--muted); flex: 0 0 32px;
 }
+.dna-acc { display: flex; flex-direction: column; }
+.dna-acc-item { border-bottom: 1px solid #eef1ef; }
+.dna-acc-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 2px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: 500 14px var(--body);
+  color: var(--text);
+}
+.dna-acc-btn em {
+  margin-left: auto;
+  font-style: normal;
+  color: #0a7a45;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.dna-chev {
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform .2s ease;
+  flex: 0 0 7px;
+}
+.dna-acc-item.open .dna-chev { transform: rotate(-135deg); }
+.dna-acc-body {
+  display: none;
+  padding: 0 0 16px;
+}
+.dna-acc-item.open .dna-acc-body { display: block; }
+.dna-drawer .slide { grid-template-columns: 52px 1fr 72px; font-size: 10px; }
 .dna-kicker {
   margin: 0 0 4px;
   font-size: 11px;
@@ -1197,8 +1272,137 @@ body.thinking #sendBtn::after {
 }
 .gem-home .idea { padding: 10px 16px; font-size: 13px; }
 
+.nav-toggle {
+  display: none;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  padding: 0;
+  cursor: pointer;
+  flex: 0 0 40px;
+}
+.nav-toggle i {
+  display: block;
+  width: 16px;
+  height: 1.5px;
+  margin: 0 auto;
+  background: var(--forest);
+  border-radius: 99px;
+}
+body.hist-open .nav-toggle { background: var(--brand-soft); }
+
 @media (max-width: 1100px) {
-  .dir-grid, .work, .gem-work, .grid-form { grid-template-columns: 1fr; }
   .ds-col { display: none; }
-  .history { display: none; }
+  .work, .grid-form { grid-template-columns: 1fr; }
+  .dir-grid { grid-template-columns: 1fr 1fr; }
+  .gem-work { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
+  .gem-work.flow-work { grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); }
+  .nav-toggle { display: grid; }
+  .hist-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 40, 31, .28);
+    z-index: 45;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .22s ease;
+  }
+  .hist-scrim.open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .history {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 50;
+    width: min(300px, 86vw);
+    height: 100dvh;
+    transform: translateX(-105%);
+    display: flex;
+    box-shadow: 18px 0 40px rgba(6, 40, 31, .12);
+    transition: transform .28s cubic-bezier(.2, .8, .2, 1);
+    padding-top: max(16px, env(safe-area-inset-top));
+    overscroll-behavior: contain;
+  }
+  body.hist-open .history { transform: translateX(0); }
+  .gem-bar { padding: 0 16px; justify-content: flex-start; }
+  .gem-brand { margin-right: 8px; }
+  .proj-tabs { margin-left: auto; margin-right: 8px; }
+  .brief, .dirs-page, .flow-page, .dna-page { padding-left: 20px; padding-right: 20px; }
+  .gem-thread { padding-left: 20px; padding-right: 20px; }
+  #app { overflow-x: hidden; }
+}
+
+@media (max-width: 800px) {
+  .dir-grid, .gem-work, .gem-work.flow-work { grid-template-columns: 1fr; }
+  .gem-work, .gem-work.flow-work { height: auto; }
+  .gem-work .gem-thread,
+  .flow-work .flow-page {
+    max-height: none;
+    overflow: visible;
+    padding: 12px 16px 20px;
+  }
+  .preview-col {
+    height: min(68dvh, 620px);
+    min-height: 420px;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .flow-work .flow-line { padding-bottom: 8px; }
+  .composer { padding-left: 16px; padding-right: 16px; }
+  .dna-drawer {
+    top: 0;
+    width: min(100%, 420px);
+    padding-top: max(16px, env(safe-area-inset-top));
+    padding-bottom: max(28px, env(safe-area-inset-bottom));
+  }
+  .dna-scrim { inset: 0; }
+  .hello { font-size: clamp(28px, 9vw, 40px); }
+  .gem-home { padding: 16px 16px 28px; min-height: calc(100dvh - 180px); }
+  .sub { font-size: 15px; margin-bottom: 18px; }
+  .idea { padding: 10px 14px; min-height: 40px; }
+  .flow-title { font-size: 22px; }
+}
+
+@media (max-width: 640px) {
+  .gem-bar {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    padding: 8px 12px 6px;
+    row-gap: 4px;
+  }
+  .proj-tabs {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    padding-bottom: 2px;
+  }
+  .gem-actions { margin-left: auto; }
+  .proj-tabs button { padding: 7px 10px; font-size: 12px; }
+  .brand-text { display: none; }
+  .gem-chip { font-size: 12px; padding: 6px 10px; }
+  .composer-box { min-height: 48px; padding: 4px 4px 4px 16px; }
+  .composer-box button { width: 40px; height: 40px; }
+  .learn-bar { gap: 8px; padding: 10px 12px max(10px, env(safe-area-inset-bottom)); }
+  .learn-bar b, .learn-bar span { font-size: 12px; }
+  .dir-grid { grid-template-columns: 1fr; }
+  .grid-form { grid-template-columns: 1fr; }
+  .prompt-group { max-width: 100%; }
+  .bubble { max-width: 92%; }
+  .busy { inset: 96px 0 80px; }
+}
+
+@media (max-width: 400px) {
+  .preview-col { min-height: 380px; height: min(64dvh, 560px); }
+  .home-chips .idea { font-size: 12px; padding: 8px 12px; }
 }

@@ -2,7 +2,8 @@
 
 Careem Challenge 2 — a Gemini-style studio that co-designs Careem screens (Rides, Food, Quik, Pay) with Design DNA, EN/AR, and iOS/Android.
 
-**Repo:** [github.com/toobajatoi/Pulse-Studio](https://github.com/toobajatoi/Pulse-Studio)
+**Repo:** [github.com/toobajatoi/Pulse-Studio](https://github.com/toobajatoi/Pulse-Studio)  
+**Submission notes:** [SUBMISSION.md](SUBMISSION.md)
 
 ## Live
 

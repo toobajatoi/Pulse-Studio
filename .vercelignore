@@ -1,0 +1,10 @@
+.venv
+.streamlit/secrets.toml
+_ref_emergent
+screenshots
+data/uber_ride_reviews.csv
+models
+web
+*.joblib
+.cursor
+__pycache__

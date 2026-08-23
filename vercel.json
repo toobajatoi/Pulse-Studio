@@ -1,11 +1,7 @@
 {
+  "buildCommand": "mkdir -p public && cp -R studio/. public/",
   "rewrites": [
-    { "source": "/", "destination": "/studio/index.html" },
-    { "source": "/canvas.html", "destination": "/studio/canvas.html" },
-    { "source": "/:file((?:.*)\\.(?:js|css|svg|png|ico|txt))", "destination": "/studio/:file" }
-  ],
-  "functions": {
-    "api/studio.py": { "maxDuration": 60 },
-    "api/ask.py": { "maxDuration": 60 }
-  }
+    { "source": "/", "destination": "/index.html" },
+    { "source": "/canvas.html", "destination": "/canvas.html" }
+  ]
 }

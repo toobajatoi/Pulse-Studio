@@ -7,3 +7,4 @@ screenshots/
 models/*.joblib
 .cursor/
 .vercel/
+.vercel

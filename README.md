@@ -1,27 +1,36 @@
-# Pulse · Design Companion
+# Pulse Studio
 
-Challenge 1 only. A Streamlit prototype that summarizes usability feedback, writes UI copy, and brainstorms layouts.
+Careem Challenge 2 — a Gemini-style studio that co-designs Careem screens (Rides, Food, Quik, Pay) with Design DNA, EN/AR, and iOS/Android.
 
-Uses **self-created dummy data** and a **free LLM**. Paste a free Groq key for Llama 3.1. If the public endpoint is busy, Pulse falls back to a local model so the demo still runs.
+**Repo:** [github.com/toobajatoi/Pulse-Studio](https://github.com/toobajatoi/Pulse-Studio)
 
-## Run
+## Live
+
+The site deploys from this repo on [Vercel](https://vercel.com). Add these environment variables in the Vercel project (never commit them):
+
+- `GEMINI_API_KEY`
+- `GROQ_API_KEY`
+- `LLM_TIMEOUT` = `12`
+
+## Run locally
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+python studio_server.py
 ```
+
+Open [http://localhost:8787](http://localhost:8787). Put keys in `.streamlit/secrets.toml` (copy `.streamlit/secrets.toml.example`).
 
 ## What it does
 
-1. **Summarize feedback** — themes, quoted evidence, five UI fixes
-2. **Generate UI copy** — headline, helper, CTA, empty, error (EN / AR)
-3. **Brainstorm layouts** — three directions, each with a test and a tradeoff
+1. Brief → three directions (you pick)
+2. Canvas with a real phone preview
+3. EN / AR and iOS / Android on the preview
+4. Style Memory (DNA) that only learns when you keep a preference
 
-## Data
+Challenge 1 Streamlit companion:
 
-`data/usability_feedback.csv` — 48 dummy ride-hailing notes. No confidential information.
-
-## LLM
-
-- Default: [Pollinations](https://text.pollinations.ai) `openai-fast` — no API key
-- Optional: free [Groq](https://console.groq.com) key → `openai/gpt-oss-20b`
+```bash
+pip install -r requirements-local.txt
+streamlit run app.py
+```

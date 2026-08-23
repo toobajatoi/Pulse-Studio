@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import joblib
+try:
+    import joblib
+except ImportError:
+    joblib = None
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "ask_model.joblib"
 
@@ -37,7 +40,10 @@ _bundle = None
 def load():
     global _bundle
     if _bundle is None:
-        _bundle = joblib.load(MODEL_PATH)
+        if joblib is None or not MODEL_PATH.exists():
+            _bundle = {}
+        else:
+            _bundle = joblib.load(MODEL_PATH)
     return _bundle
 
 
@@ -46,14 +52,25 @@ def _route(question: str, bundle: dict) -> tuple[str, float, str]:
     for topic, keys in HINTS.items():
         if any(k in q for k in keys):
             return topic, 0.97, "rule"
-    topic = bundle["classifier"].predict([question])[0]
-    confidence = float(max(bundle["classifier"].predict_proba([question])[0]))
-    return topic, confidence, "model"
+    if bundle and "classifier" in bundle:
+        topic = bundle["classifier"].predict([question])[0]
+        confidence = float(max(bundle["classifier"].predict_proba([question])[0]))
+        return topic, confidence, "model"
+    return "other", 0.4, "rule"
 
 
 def ask(question: str) -> dict:
     bundle = load()
     topic, confidence, routed = _route(question, bundle)
+    if not bundle or "retriever_vec" not in bundle:
+        return {
+            "topic": topic,
+            "confidence": round(confidence, 2),
+            "routed": routed,
+            "answer": ANSWERS.get(topic, ANSWERS["other"]),
+            "evidence": [],
+            "model": "rules",
+        }
     vec = bundle["retriever_vec"].transform([question])
     _, idx = bundle["retriever_nn"].kneighbors(vec)
     ranked = []

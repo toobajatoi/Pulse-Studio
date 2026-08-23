@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tomllib
 from pathlib import Path
@@ -69,7 +70,24 @@ Rules:
 
 
 def _keys() -> dict:
-    return tomllib.loads(SECRETS.read_text(encoding="utf-8"))
+    keys = {
+        "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", ""),
+        "GROQ_API_KEY": os.environ.get("GROQ_API_KEY", ""),
+    }
+    if keys["GEMINI_API_KEY"] and keys["GROQ_API_KEY"]:
+        return keys
+    if SECRETS.exists():
+        local = tomllib.loads(SECRETS.read_text(encoding="utf-8"))
+        keys["GEMINI_API_KEY"] = keys["GEMINI_API_KEY"] or str(local.get("GEMINI_API_KEY") or "")
+        keys["GROQ_API_KEY"] = keys["GROQ_API_KEY"] or str(local.get("GROQ_API_KEY") or "")
+    return keys
+
+
+def _timeout() -> int:
+    try:
+        return max(6, int(os.environ.get("LLM_TIMEOUT", "32")))
+    except ValueError:
+        return 32
 
 
 def _parse(text: str) -> dict:
@@ -92,7 +110,7 @@ def _gemini(prompt: str) -> str:
         url,
         json=payload,
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
-        timeout=32,
+        timeout=_timeout(),
     )
     response.raise_for_status()
     parts = response.json()["candidates"][0]["content"]["parts"]
@@ -113,7 +131,7 @@ def _groq(prompt: str) -> str:
             ],
         },
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        timeout=32,
+        timeout=_timeout(),
     )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]

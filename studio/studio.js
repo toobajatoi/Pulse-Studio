@@ -762,13 +762,116 @@ function renderFromBlocks(s) {
     screenRtl()
   );
 }
+const KNOWN_BLOCKS = new Set([
+  "hello",
+  "location",
+  "search",
+  "pills",
+  "categories",
+  "offer",
+  "section",
+  "restaurants",
+  "hero",
+  "stats",
+  "split",
+  "list",
+  "note",
+  "map",
+  "sheet",
+  "captain",
+  "trip",
+  "rating",
+  "tips",
+  "totals",
+  "cta",
+  "tabs",
+]);
+
+const BLOCK_ALIASES = {
+  captaincard: "captain",
+  captainrow: "captain",
+  drivercard: "captain",
+  driver: "captain",
+  progresslist: "list",
+  progress: "list",
+  timeline: "list",
+  steps: "list",
+  listrow: "list",
+  livemap: "map",
+  drivermap: "map",
+  bottomsheet: "sheet",
+  actionsheet: "sheet",
+  button: "cta",
+  primarybutton: "cta",
+  secondarybutton: "cta",
+  searchfield: "search",
+  whereto: "search",
+  offerbanner: "offer",
+  chiprow: "pills",
+};
+
+function canonicalBlockType(value) {
+  const raw = String(value || "note");
+  const key = raw.toLowerCase().replace(/[^a-z]/g, "");
+  if (BLOCK_ALIASES[key]) return BLOCK_ALIASES[key];
+  if (KNOWN_BLOCKS.has(raw.toLowerCase())) return raw.toLowerCase();
+  return raw;
+}
+
+function knownBlocks(list) {
+  return (list || [])
+    .filter((b) => b && typeof b === "object")
+    .map((b) => ({ ...b, type: canonicalBlockType(b.type || b.name || b.component) }))
+    .filter((b) => KNOWN_BLOCKS.has(b.type));
+}
+
+function fieldsFromBlocks(screen) {
+  const blocks = knownBlocks(screen.blocks);
+  const cap = blocks.find((b) => b.type === "captain") || {};
+  const trip = blocks.find((b) => b.type === "trip") || {};
+  const sheet = blocks.find((b) => b.type === "sheet") || {};
+  const hello = blocks.find((b) => b.type === "hello") || {};
+  return {
+    ...screen,
+    captain: screen.captain || cap.name || "Yousef",
+    rating: screen.rating || cap.rating || "4.9",
+    car: screen.car || cap.car || "White Toyota Camry",
+    plate: screen.plate || cap.plate || "D-17234",
+    pickup: screen.pickup || trip.pickup,
+    dest: screen.dest || trip.dest,
+    fare: screen.fare || trip.fare || screen.amount,
+    method: screen.method || trip.method,
+    eta: screen.eta || sheet.sub || "3 min",
+    title: screen.title || hello.title || sheet.title,
+    primary: screen.primary || sheet.primary,
+    secondary: screen.secondary || sheet.secondary,
+    blocks,
+  };
+}
+
 function hydrateScreen(raw) {
   if (!raw || typeof raw !== "object") return { kind: "generic", label: "Careem", blocks: fallbackBlocks("Home") };
-  if (Array.isArray(raw.blocks) && raw.blocks.length >= 2) return raw;
-  const blocks = blocksFromFields(raw);
-  if (blocks.length >= 2) return { ...raw, blocks };
-  const step = raw.label || state.flow.here || "Home";
-  return { ...raw, blocks: fallbackBlocks(step) };
+  const kind = raw.kind || inferKindFromText(`${raw.label || ""} ${state.brief.goal || ""}`) || "generic";
+  let blocks = knownBlocks(raw.blocks);
+  if (blocks.length < 2) {
+    const converted = knownBlocks(blocksFromFields(raw));
+    blocks = converted.length >= 2 ? converted : fallbackBlocks(raw.label || kind || "Home");
+  }
+  return { ...raw, kind, blocks };
+}
+
+function renderOne(s) {
+  if (!s) return "";
+  const screen = hydrateScreen(s);
+  const kind = screenKind(screen);
+  const merged = fieldsFromBlocks(screen);
+  if (kind === "arriving") return renderArriving(merged);
+  if (kind === "accept") return renderAccept(merged);
+  if (kind === "cancel") return renderCancel(merged);
+  if (kind === "failed") return renderFailed(merged);
+  if (kind === "completed") return renderCompleted(merged);
+  if (merged.blocks && merged.blocks.length) return renderFromBlocks(merged);
+  return renderFromBlocks({ ...merged, blocks: fallbackBlocks(merged.label || "Home") });
 }
 function blocksFromFields(s) {
   const out = [];
@@ -796,12 +899,6 @@ function blocksFromFields(s) {
   if (Array.isArray(s.tips) && s.tips.length) out.push({ type: "tips", items: s.tips });
   if (Array.isArray(s.tabs) && s.tabs.length) out.push({ type: "tabs", items: s.tabs });
   return out;
-}
-function renderOne(s) {
-  if (!s) return "";
-  const screen = hydrateScreen(s);
-  if (screen.blocks && screen.blocks.length) return renderFromBlocks(screen);
-  return renderFromBlocks({ ...screen, blocks: fallbackBlocks(screen.label || "Home") });
 }
 
 function previewTools() {

@@ -469,8 +469,14 @@ def _screen_usable(screen: dict | None) -> bool:
     if not isinstance(screen, dict) or not screen:
         return False
     blocks = screen.get("blocks")
-    if isinstance(blocks, list) and len(blocks) >= 2:
-        return True
+    if isinstance(blocks, list):
+        known = [
+            b
+            for b in blocks
+            if isinstance(b, dict) and _block_type(b.get("type") or b.get("name")) in KNOWN_BLOCK_TYPES
+        ]
+        if len(known) >= 2:
+            return True
     if screen.get("kind") in ("arriving", "accept", "cancel", "failed", "checkout", "completed", "food", "superapp"):
         return True
     return bool(screen.get("fare") or screen.get("captain") or screen.get("amount"))
@@ -569,6 +575,65 @@ def _as_label(value) -> str:
     return str(value)
 
 
+KNOWN_BLOCK_TYPES = {
+    "hello",
+    "location",
+    "search",
+    "pills",
+    "categories",
+    "offer",
+    "section",
+    "restaurants",
+    "hero",
+    "stats",
+    "split",
+    "list",
+    "note",
+    "map",
+    "sheet",
+    "captain",
+    "trip",
+    "rating",
+    "tips",
+    "totals",
+    "cta",
+    "tabs",
+}
+
+BLOCK_ALIASES = {
+    "captaincard": "captain",
+    "captainrow": "captain",
+    "drivercard": "captain",
+    "driver": "captain",
+    "progresslist": "list",
+    "progress": "list",
+    "timeline": "list",
+    "steps": "list",
+    "listrow": "list",
+    "livemap": "map",
+    "drivermap": "map",
+    "bottomsheet": "sheet",
+    "actionsheet": "sheet",
+    "button": "cta",
+    "primarybutton": "cta",
+    "secondarybutton": "cta",
+    "searchfield": "search",
+    "whereto": "search",
+    "offerbanner": "offer",
+    "chiprow": "pills",
+}
+
+
+def _block_type(value) -> str:
+    raw = str(value or "note")
+    key = "".join(ch for ch in raw.lower() if ch.isalpha())
+    if key in BLOCK_ALIASES:
+        return BLOCK_ALIASES[key]
+    if raw.lower() in KNOWN_BLOCK_TYPES:
+        return raw.lower()
+    return raw
+
+
 def normalize_blocks(screen: dict) -> dict:
     """Coerce LLM objects into strings the phone renderer can paint."""
     cleaned = []
@@ -576,7 +641,8 @@ def normalize_blocks(screen: dict) -> dict:
         if not isinstance(raw, dict):
             continue
         b = dict(raw)
-        t = b.get("type")
+        t = _block_type(b.get("type") or b.get("name") or b.get("component"))
+        b["type"] = t
         if t in ("pills", "categories", "tabs", "tips") and isinstance(b.get("items"), list):
             b["items"] = [_as_label(x) for x in b["items"] if _as_label(x)]
         if t == "list" and isinstance(b.get("items"), list):
@@ -742,7 +808,14 @@ def _blocks_from_fields(screen: dict) -> list[dict]:
 def ensure_blocks(screen: dict, goal: str = "") -> dict:
     if not isinstance(screen, dict):
         return {"kind": "generic", "label": "Careem", "blocks": [{"type": "note", "text": "No screen yet."}]}
-    blocks = [b for b in (screen.get("blocks") or []) if isinstance(b, dict)]
+    blocks = []
+    for raw in screen.get("blocks") or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        item["type"] = _block_type(item.get("type") or item.get("name") or item.get("component"))
+        if item["type"] in KNOWN_BLOCK_TYPES:
+            blocks.append(item)
     if len(blocks) >= 2:
         screen["blocks"] = blocks
         return screen

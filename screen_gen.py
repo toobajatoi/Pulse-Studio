@@ -683,325 +683,173 @@ def complete_screen(screen: dict, goal: str = "") -> dict:
     return ensure_blocks(screen, goal)
 
 
+def _trim_block(block: dict, n: int) -> dict:
+    item = dict(block)
+    if isinstance(item.get("items"), list):
+        item["items"] = item["items"][:n]
+    if isinstance(item.get("rows"), list):
+        item["rows"] = item["rows"][:n]
+    return item
+
+
+def _guided_copy(kind: str, screen: dict) -> str:
+    plate = str(screen.get("plate") or "").strip()
+    copies = {
+        "food": "We deliver to this pin. Change it if this is not home.",
+        "checkout": "Delivery fee is shown here before you tap Pay.",
+        "completed": "Tip is optional. Your captain only sees it if you add one.",
+        "failed": "The amount stays on this screen until you retry or change the method.",
+        "arriving": f"Walk to the pin.{f' Plate {plate}.' if plate else ''}",
+        "accept": "Fare is locked on this sheet before you accept.",
+        "cancel": "The fee is charged if you confirm cancel.",
+        "superapp": "Pick a service, or search Where to.",
+        "home": "Your primary number stays above the fold.",
+    }
+    return copies.get(kind) or "Read the numbers on this screen before you tap."
+
+
+def _direction_fastest(blocks: list[dict]) -> list[dict]:
+    types = {b.get("type") for b in blocks}
+    drop = {"note", "tips"}
+    if types & {"hello", "hero", "sheet", "totals"}:
+        drop.add("trip")
+        if "map" not in types:
+            drop.add("captain")
+    if "list" in types and "restaurants" not in types:
+        drop.add("categories")
+    if "restaurants" in types:
+        drop.add("offer")
+    compact = bool(types & {"totals", "hello"}) and not (types & {"list", "restaurants", "map", "sheet"})
+    out = []
+    restaurants = 0
+    ctas = 0
+    for raw in blocks:
+        t = raw.get("type")
+        if t in drop:
+            continue
+        if t == "cta":
+            ctas += 1
+            if ctas > (1 if compact else 2):
+                continue
+        if t == "restaurants":
+            restaurants += 1
+            if restaurants > 1:
+                continue
+            out.append(_trim_block(raw, 2))
+            continue
+        if t == "list":
+            out.append(_trim_block(raw, 2))
+            continue
+        if t in ("categories", "pills"):
+            out.append(_trim_block(raw, 4))
+            continue
+        out.append(dict(raw))
+    return out
+
+
+def _direction_informative(blocks: list[dict]) -> list[dict]:
+    out = []
+    restaurants = 0
+    for raw in blocks:
+        t = raw.get("type")
+        if t == "note":
+            continue
+        if t == "restaurants":
+            restaurants += 1
+            out.append(_trim_block(raw, 2 if restaurants == 1 else 3))
+            continue
+        if t == "list":
+            out.append(_trim_block(raw, 3))
+            continue
+        out.append(dict(raw))
+    return out
+
+
+def _direction_guided(blocks: list[dict], kind: str, screen: dict) -> list[dict]:
+    out = [dict(b) for b in blocks]
+    if any(b.get("type") == "note" for b in out):
+        return out
+    note = {"type": "note", "text": _guided_copy(kind, screen)}
+    insert_at = 0
+    for i, block in enumerate(out):
+        if block.get("type") in {"hello", "location", "search", "map", "captain"}:
+            insert_at = i + 1
+    out.insert(insert_at, note)
+    return out
+
+
+def _sync_fields_from_blocks(screen: dict) -> dict:
+    blocks = [b for b in (screen.get("blocks") or []) if isinstance(b, dict)]
+    types = {b.get("type") for b in blocks}
+    note = next((b for b in blocks if b.get("type") == "note"), None)
+    tips = next((b for b in blocks if b.get("type") == "tips"), None)
+    offer = next((b for b in blocks if b.get("type") == "offer"), None)
+    listing = next((b for b in blocks if b.get("type") == "list"), None)
+    cats = next((b for b in blocks if b.get("type") == "categories"), None)
+    totals = next((b for b in blocks if b.get("type") == "totals"), None)
+    rests = [b for b in blocks if b.get("type") == "restaurants"]
+    screen["helper"] = (note or {}).get("text") or ""
+    screen["tips"] = (tips or {}).get("items") or []
+    screen["offer"] = (offer or {}).get("text") or ""
+    if listing and listing.get("items") is not None:
+        screen["items"] = listing.get("items")
+    if totals and (totals.get("rows") or totals.get("items")):
+        screen["rows"] = totals.get("rows") or totals.get("items")
+    if cats and cats.get("items") is not None:
+        screen["categories"] = cats.get("items")
+        screen["slots"] = cats.get("items")
+        if cats.get("items"):
+            screen["slot"] = cats["items"][0]
+    if rests:
+        screen["restaurants"] = [row for b in rests for row in (b.get("items") or [])]
+        screen["sections"] = [{"title": b.get("title") or "For you", "items": b.get("items") or []} for b in rests]
+    screen["showRoute"] = "trip" in types
+    screen["showCaptain"] = "captain" in types
+    screen["showTips"] = "tips" in types
+    screen["showFeedback"] = "note" in types
+    screen["showProgress"] = "note" in types or "trip" in types
+    screen["showPlate"] = "captain" in types
+    screen["showPickup"] = "trip" in types
+    if "cta" in types:
+        primary = next((b for b in blocks if b.get("type") == "cta" and b.get("style") != "secondary"), None)
+        secondary = next((b for b in blocks if b.get("type") == "cta" and b.get("style") == "secondary"), None)
+        if primary:
+            screen["primary"] = primary.get("text") or screen.get("primary")
+        screen["secondary"] = (secondary or {}).get("text") or ""
+    return screen
+
+
 def apply_direction(screen: dict, direction_id: str, goal: str = "") -> dict:
-    """Make Fastest / Informative / Guided actually different layouts."""
-    screen = copy.deepcopy(screen or {})
+    """Fastest / Informative / Guided are layout rules on whatever screen this brief produced."""
     did = str(direction_id or "B").upper()[:1]
     if did not in ("A", "B", "C"):
         did = "B"
+    screen = complete_screen(copy.deepcopy(screen or {}), goal)
     kind = str(screen.get("kind") or infer_screen_kind(goal) or "generic")
     names = {"A": "Fastest", "B": "Informative", "C": "Guided"}
+    blocks = [dict(b) for b in (screen.get("blocks") or []) if isinstance(b, dict)]
+    if did == "A":
+        blocks = _direction_fastest(blocks)
+    elif did == "C":
+        blocks = _direction_guided(blocks, kind, screen)
+    else:
+        blocks = _direction_informative(blocks)
+    screen["blocks"] = blocks
     screen["_direction"] = did
     screen["kind"] = kind
     screen["label"] = f"{(screen.get('label') or kind.title()).split('·')[0].strip()} · {names[did]}"
-    blocks = [b for b in (screen.get("blocks") or []) if isinstance(b, dict)]
-
-    if kind == "food":
-        rests: list[dict] = []
-        for b in blocks:
-            if b.get("type") == "restaurants":
-                rests.extend(b.get("items") or [])
-        if not rests:
-            rests = list(food_home(goal).get("restaurants") or [])
-        loc = next((b for b in blocks if b.get("type") == "location"), None) or {
-            "type": "location",
-            "text": screen.get("location") or "Marina Walk, JBR",
-        }
-        search = next((b for b in blocks if b.get("type") == "search"), None) or {
-            "type": "search",
-            "text": screen.get("search") or "Search restaurants or dishes",
-        }
-        if did == "A":
-            keep, cats, offer, helper = rests[:2], ["Burgers", "Arabic", "Pizza", "Coffee"], "30% off first order", ""
-            title = "For you"
-        elif did == "C":
-            keep, cats, offer, helper = (
-                rests[:3],
-                ["Burgers", "Healthy", "Arabic", "Desserts", "Coffee", "Pizza"],
-                "30% off · First Food order · FOOD20",
-                "We deliver to this pin. Change it if this is not home.",
-            )
-            title = "Start here"
-        else:
-            keep, cats, offer, helper = (
-                rests[:4],
-                ["Burgers", "Healthy", "Arabic", "Desserts", "Coffee", "Pizza"],
-                "Free delivery over AED 40 · Plus",
-                "",
-            )
-            title = "Recommended"
-        rebuilt = [
-            loc,
-            search,
-            {"type": "categories", "items": cats},
-            {"type": "offer", "text": offer},
-        ]
-        if helper:
-            rebuilt.append({"type": "note", "text": helper})
-        rebuilt.append({"type": "restaurants", "title": title, "items": keep[:2] if did == "A" else keep[:2]})
-        if did != "A" and keep[2:]:
-            rebuilt.append({"type": "restaurants", "title": "Popular near you", "items": keep[2:]})
-        rebuilt.append({"type": "tabs", "items": ["Food", "Search", "Orders", "You"]})
-        screen["blocks"] = rebuilt
-        screen["helper"] = helper
-        screen["offer"] = offer
-        screen["categories"] = cats
-        screen["restaurants"] = keep
-        screen["location"] = loc.get("text")
-        screen["search"] = search.get("text")
-        return screen
-
-    if kind == "failed":
-        amount = screen.get("amount") or screen.get("fare") or "AED 25.00"
-        method = screen.get("method") or "Visa **** 1234"
-        if did == "A":
-            rows = [{"label": "Trip amount", "value": amount}]
-            helper = ""
-            sub = "Retry with the same card"
-        elif did == "C":
-            rows = [{"label": "Trip amount", "value": amount}, {"label": "Card", "value": method}]
-            helper = "Your card was declined. The amount stays on this screen until you retry or change the method."
-            sub = "Choose how you want to pay"
-        else:
-            rows = [
-                {"label": "Trip amount", "value": amount},
-                {"label": "Card", "value": method},
-                {"label": "Time", "value": "Just now"},
-            ]
-            helper = ""
-            sub = "Payment could not be processed"
-        screen["blocks"] = [
-            {"type": "hello", "kicker": "Pay", "title": "Payment failed"},
-            *( [{"type": "note", "text": helper}] if helper else [] ),
-            {"type": "totals", "rows": rows},
-            {"type": "cta", "text": "Try Again"},
-            {"type": "cta", "text": "Change Payment", "style": "secondary"},
-        ]
-        screen["amount"] = amount
-        screen["method"] = method
-        screen["helper"] = helper
-        screen["sub"] = sub
-        screen["rows"] = rows
-        return screen
-
-    if kind == "arriving":
-        plate = screen.get("plate") or "D-17234"
-        if did == "A":
-            screen["helper"] = ""
-            screen["eta"] = screen.get("eta") or "3 min"
-            screen["secondary"] = "Message"
-            screen["showProgress"] = False
-            screen["showPlate"] = False
-            screen["showPickup"] = False
-        elif did == "C":
-            screen["helper"] = f"Walk to the pin. Plate {plate}."
-            screen["eta"] = screen.get("eta") or "3 min"
-            screen["showProgress"] = True
-            screen["showPlate"] = True
-            screen["showPickup"] = True
-        else:
-            screen["helper"] = ""
-            screen["showProgress"] = True
-            screen["showPlate"] = True
-            screen["showPickup"] = True
-        rebuilt = [b for b in blocks if b.get("type") in {"map", "captain", "trip", "sheet", "note"}]
-        if not any(b.get("type") == "map" for b in rebuilt):
-            rebuilt.insert(0, {"type": "map"})
-        if did == "C" and screen.get("helper") and not any(b.get("type") == "note" for b in rebuilt):
-            rebuilt.append({"type": "note", "text": screen["helper"]})
-        if rebuilt:
-            screen["blocks"] = rebuilt
-        return screen
-
-    if kind == "superapp" and did == "A":
-        screen["blocks"] = [b for b in blocks if b.get("type") in {"hello", "search", "pills", "tabs"}]
-        if len(screen["blocks"]) < 3:
-            screen["blocks"] = superapp_home(goal).get("blocks") or screen["blocks"]
-        return screen
-
-    if kind == "checkout":
-        tmpl = checkout_screen(goal)
-        items = _cart_rows(screen)
-        if len(items) < 2:
-            items = list(tmpl.get("items") or [])
-        loc = next((b for b in blocks if b.get("type") == "location"), None)
-        address = (loc or {}).get("text") or screen.get("location") or "Marina Walk, JLT"
-        offer = next((b for b in blocks if b.get("type") == "offer"), None)
-        if did == "A":
-            keep, slots, helper, promo = items[:2], ["Today · 6–8 pm"], "", ""
-            fee_note = "Delivery fee before Pay"
-        elif did == "C":
-            keep, slots, helper, promo = (
-                items[:3],
-                ["Today · 6–8 pm", "Tomorrow · 10–12", "Tomorrow · 6–8 pm"],
-                "Delivery fee is shown here before you tap Pay.",
-                "FOOD20 · AED 5 off",
-            )
-            fee_note = "AED 9 delivery · no surprise at Pay"
-        else:
-            keep, slots, helper, promo = (
-                items[:3],
-                ["Today · 6–8 pm", "Tomorrow · 10–12"],
-                "",
-                "Plus · free delivery over AED 40",
-            )
-            fee_note = "Delivery fee · shown before you pay"
-        sub = _money_text(screen.get("sub")) or tmpl.get("sub") or "AED 41"
-        fee = _money_text(screen.get("fee")) or tmpl.get("fee") or "AED 9"
-        total = _money_text(screen.get("total")) or tmpl.get("total") or "AED 50"
-        rebuilt = [
-            {"type": "hello", "kicker": screen.get("store") or "Quik", "title": "Checkout"},
-            {"type": "location", "text": address},
-            {"type": "list", "title": "Cart", "items": keep},
-            {"type": "categories", "items": slots},
-        ]
-        if promo:
-            rebuilt.append({"type": "offer", "text": promo})
-        if helper:
-            rebuilt.append({"type": "note", "text": helper})
-        rebuilt.extend(
-            [
-                {
-                    "type": "totals",
-                    "rows": [
-                        {"label": "Subtotal", "value": sub},
-                        {"label": "Delivery", "value": fee},
-                        {"label": "Total", "value": total},
-                    ],
-                },
-                {"type": "cta", "text": "Pay now"},
-                {"type": "cta", "text": "Change slot", "style": "secondary"},
-            ]
-        )
-        screen["blocks"] = rebuilt
-        screen["items"] = keep
-        screen["slot"] = slots[0]
-        screen["slots"] = slots
-        screen["sub"] = sub
-        screen["fee"] = fee
-        screen["total"] = total
-        screen["feeNote"] = fee_note
-        screen["helper"] = helper
-        screen["offer"] = promo or ((offer or {}).get("text") or "")
-        screen["store"] = screen.get("store") or "Quik"
-        screen["primary"] = "Pay now"
-        screen["secondary"] = "Change slot"
-        screen["location"] = address
-        return screen
-
-    if kind == "completed":
-        tmpl = completed_screen(goal)
-        fare = _money_text(screen.get("fare")) or tmpl.get("fare") or "AED 32.50"
-        pickup = screen.get("pickup") or tmpl.get("pickup")
-        dest = screen.get("dest") or tmpl.get("dest")
-        duration = screen.get("duration") or tmpl.get("duration") or "24 min"
-        distance = screen.get("distance") or tmpl.get("distance") or "12.4 km"
-        method = screen.get("method") or tmpl.get("method") or "Careem Pay"
-        name = screen.get("captain") or tmpl.get("captain") or "Yousef"
-        car = screen.get("car") or tmpl.get("car") or "White Toyota Camry"
-        rating = screen.get("rating") or tmpl.get("rating") or "4.9"
-        tips = list(screen.get("tips") or tmpl.get("tips") or ["AED 5", "AED 10", "AED 15"])
-        if did == "A":
-            show_route = show_captain = show_tips = show_feedback = False
-            helper = ""
-            rate_prompt = ""
-            keep_tips: list = []
-            secondary = ""
-        elif did == "C":
-            show_route = show_captain = show_tips = show_feedback = True
-            helper = "Tip is optional. Your captain only sees it if you add one."
-            rate_prompt = "How was your trip?"
-            keep_tips = tips[:3]
-            secondary = "View receipt"
-        else:
-            show_route = show_captain = show_tips = True
-            show_feedback = False
-            helper = ""
-            rate_prompt = "Rate your captain"
-            keep_tips = tips[:3]
-            secondary = "View receipt"
-        rebuilt = [{"type": "hello", "kicker": "Trip complete", "title": fare}]
-        if helper:
-            rebuilt.append({"type": "note", "text": helper})
-        if show_route:
-            rebuilt.append(
-                {
-                    "type": "trip",
-                    "pickup": pickup,
-                    "dest": dest,
-                    "fare": fare,
-                    "method": method,
-                    "duration": duration,
-                    "distance": distance,
-                }
-            )
-        if show_captain:
-            rebuilt.append({"type": "captain", "name": name, "rating": rating, "car": car})
-        rebuilt.append({"type": "rating", "value": 4})
-        if keep_tips:
-            rebuilt.append({"type": "tips", "items": keep_tips})
-        rebuilt.append({"type": "cta", "text": "Done"})
-        if secondary:
-            rebuilt.append({"type": "cta", "text": secondary, "style": "secondary"})
-        screen["blocks"] = rebuilt
-        screen["fare"] = fare
-        screen["pickup"] = pickup
-        screen["dest"] = dest
-        screen["duration"] = duration
-        screen["distance"] = distance
-        screen["method"] = method
-        screen["captain"] = name
-        screen["car"] = car
-        screen["rating"] = rating
-        screen["tips"] = keep_tips
-        screen["helper"] = helper
-        screen["ratePrompt"] = rate_prompt
-        screen["primary"] = "Done"
-        screen["secondary"] = secondary
-        screen["showRoute"] = show_route
-        screen["showCaptain"] = show_captain
-        screen["showTips"] = show_tips
-        screen["showFeedback"] = show_feedback
-        return screen
-
-    return screen
+    return _sync_fields_from_blocks(screen)
 
 
 def direction_reply(kind: str, direction_id: str, fallback: str = "") -> str:
     did = str(direction_id or "B").upper()[:1]
-    table = {
-        "food": {
-            "A": "Fastest Food home — search and two restaurants above the fold. Categories stay one row.",
-            "B": "Informative Food home — location, offer, and cards with rating, ETA, and from-price.",
-            "C": "Guided Food home — a helper under search so first-time users can change the delivery pin.",
-        },
-        "failed": {
-            "A": "Fastest payment failed — trip amount and Try Again first. Change Payment stays secondary.",
-            "B": "Informative payment failed — amount, card, and time stay visible before they retry.",
-            "C": "Guided payment failed — a short reason the charge failed, then Try Again or Change Payment.",
-        },
-        "arriving": {
-            "A": "Fastest arriving — ETA and Call on the first glance. Cancel stays a text action.",
-            "B": "Informative arriving — name, rating, car, and plate before they wait.",
-            "C": "Guided arriving — a pin hint and plate so new riders can find the car.",
-        },
-        "superapp": {
-            "A": "Fastest Super App — Where to and the service grid above the fold.",
-            "B": "Informative Super App — services, a promo, and recent places without hunting.",
-            "C": "Guided Super App — new users see every Careem product and how to search.",
-        },
-        "checkout": {
-            "A": "Fastest Quik checkout — cart, delivery fee, and Pay on one screen.",
-            "B": "Informative checkout — slot, fee note, and item prices before the tap.",
-            "C": "Guided checkout — a helper that the delivery fee is shown before Pay.",
-        },
-        "completed": {
-            "A": "Fastest trip complete — fare, stars, and Done. Tip stays off this screen.",
-            "B": "Informative trip complete — route, payment, captain, then rate and tip.",
-            "C": "Guided trip complete — a helper that tipping is optional, then rate, tip, and receipt.",
-        },
+    label = (kind or "screen").replace("_", " ")
+    lines = {
+        "A": f"Fastest {label} — fewer blocks, the primary number and CTA above the fold.",
+        "B": f"Informative {label} — prices, fees, and context stay visible before the tap.",
+        "C": f"Guided {label} — a helper for first-time users, still max two actions.",
     }
-    return (table.get(kind) or {}).get(did) or fallback or "Here is that direction, generated from your brief."
+    return lines.get(did) or fallback or "Here is that direction, generated from your brief."
 
 
 def sanitize_blocks(screen: dict, goal: str = "") -> dict:
@@ -1325,10 +1173,12 @@ def _blocks_from_fields(screen: dict) -> list[dict]:
             built.append({"type": "hello", "kicker": "Trip complete", "title": screen.get("fare")})
         if screen.get("tips"):
             built.append({"type": "tips", "items": screen["tips"]})
-        if screen.get("rating") and not screen.get("captain"):
+        if screen.get("rating"):
             built.append({"type": "rating", "value": screen.get("rating")})
         if screen.get("primary"):
             built.append({"type": "cta", "text": screen.get("primary")})
+        if screen.get("secondary"):
+            built.append({"type": "cta", "text": screen["secondary"], "style": "secondary"})
     if isinstance(screen.get("tabs"), list) and screen["tabs"]:
         built.append({"type": "tabs", "items": screen["tabs"]})
     elif screen.get("cta") and not any(b.get("type") == "cta" for b in built):

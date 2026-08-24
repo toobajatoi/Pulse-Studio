@@ -310,59 +310,22 @@ def infer_kind(brief: dict) -> str:
 
 def directions_for(brief: dict) -> list[dict]:
     kind = infer_kind(brief)
-    product = brief.get("product") or "Rides"
-    if kind == "arriving":
-        return [
-            {"id": "A", "name": "Fastest", "promise": "ETA and Call on the first glance.", "note": "Cancel stays a text action."},
-            {"id": "B", "name": "Informative", "promise": "Name, rating, car, and plate before they wait.", "note": "Pickup progress stays visible."},
-            {"id": "C", "name": "Guided", "promise": "New riders see arrival progress and how to reach the captain.", "note": "Still max 2 primary actions."},
-        ]
-    if kind == "accept":
-        return [
-            {"id": "A", "name": "Fastest", "promise": "Fare and Accept on the first glance.", "note": "Map stays up. Two actions only."},
-            {"id": "B", "name": "Informative", "promise": "Pickup, drop-off, distance, and time before they commit.", "note": "Rating stays visible."},
-            {"id": "C", "name": "Guided", "promise": "First-time captains get the route and fare explained.", "note": "Still max 2 CTAs."},
-        ]
-    if kind == "cancel":
-        return [
-            {"id": "A", "name": "Fastest", "promise": "Minimal steps, optimized for conversion.", "note": "Fee still visible. One confirm."},
-            {"id": "B", "name": "Informative", "promise": "More explanation and pricing transparency.", "note": "Why the fee exists, before they tap."},
-            {"id": "C", "name": "Guided", "promise": "More hand-holding for first-time riders.", "note": "Keep ride + undo after cancel."},
-        ]
-    if kind == "checkout":
-        return [
-            {"id": "A", "name": "Fastest", "promise": "Fewest taps from slot to pay.", "note": "Delivery fee locked next to the CTA."},
-            {"id": "B", "name": "Informative", "promise": "Fee, slot, and substitutions explained.", "note": "No surprise at the last step."},
-            {"id": "C", "name": "Guided", "promise": "First-time grocery users get a walkthrough.", "note": "Confirm before a destructive change."},
-        ]
-    if kind == "completed":
-        return [
-            {"id": "A", "name": "Fastest", "promise": "Fare, stars, and Done on one screen.", "note": "Tip stays optional."},
-            {"id": "B", "name": "Informative", "promise": "Route, payment, and captain before you rate.", "note": "Receipt stays one tap away."},
-            {"id": "C", "name": "Guided", "promise": "First-time riders see how tipping works.", "note": "Still max 2 primary actions."},
-        ]
-    if kind == "superapp":
-        return [
-            {"id": "A", "name": "Fastest", "promise": "Where to and the service grid on the first glance.", "note": "One tap into Rides or Food."},
-            {"id": "B", "name": "Informative", "promise": "Services, a promo, and recent places without hunting.", "note": "No charts on the home hub."},
-            {"id": "C", "name": "Guided", "promise": "New users see every Careem product and how to search.", "note": "Still max 2 CTAs."},
-        ]
-    if kind == "food":
-        return [
-            {"id": "A", "name": "Fastest", "promise": "Search and top picks above the fold.", "note": "Categories as one scroll row."},
-            {"id": "B", "name": "Informative", "promise": "Location, offers, ratings, ETA, and from-price on every card.", "note": "Popular dishes visible."},
-            {"id": "C", "name": "Guided", "promise": "New users see how delivery location and offers work.", "note": "Still scannable · no clutter."},
-        ]
-    if kind == "home":
-        return [
-            {"id": "A", "name": "Fastest", "promise": f"One-tap {product} from home.", "note": "Primary number on the first screen."},
-            {"id": "B", "name": "Informative", "promise": "Analytics and breakdown visible without hunting.", "note": "Where to stays above the fold."},
-            {"id": "C", "name": "Guided", "promise": "New users understand Plus cashback vs spend.", "note": "Helper copy, still max 2 CTAs."},
-        ]
+    product = brief.get("product") or "Careem"
+    what = {
+        "arriving": "arriving",
+        "accept": "accept",
+        "cancel": "cancel",
+        "checkout": "checkout",
+        "completed": "trip complete",
+        "failed": "payment failed",
+        "food": "Food home",
+        "superapp": "Super App home",
+        "home": f"{product} home",
+    }.get(kind, product)
     return [
-        {"id": "A", "name": "Fastest", "promise": "Only what the brief needs on screen.", "note": "Max 2 CTAs."},
-        {"id": "B", "name": "Informative", "promise": "Numbers and context before the tap.", "note": "Careem components only."},
-        {"id": "C", "name": "Guided", "promise": "Helper copy for first-time users.", "note": "Still one primary action."},
+        {"id": "A", "name": "Fastest", "promise": f"Only the {what} action and the number that matter first.", "note": "Max 2 CTAs."},
+        {"id": "B", "name": "Informative", "promise": f"Prices, fees, and context stay visible on this {what} screen.", "note": "Careem components only."},
+        {"id": "C", "name": "Guided", "promise": f"One helper line so a first-time user can finish {what}.", "note": "Still max 2 primary actions."},
     ]
 
 

@@ -539,9 +539,10 @@ function renderArriving(raw) {
   const name = raw.captain || "Yousef";
   const eta = raw.eta || "3 min";
   const progress = Math.max(8, Math.min(100, Number(raw.progress) || 68));
-  const showProgress = raw.showProgress !== false;
-  const showPlate = raw.showPlate !== false;
-  const showPickup = raw.showPickup !== false;
+  const directed = Boolean(raw._direction);
+  const showProgress = directed ? raw.showProgress === true : true;
+  const showPlate = directed ? raw.showPlate !== false : true;
+  const showPickup = directed ? raw.showPickup === true : true;
   return device(
     `<div class="map"><div class="road"></div><div class="road b"></div><div class="pin a"></div><div class="pin b"></div><div class="fare">${esc(raw.fare || "")}</div><div class="eta-chip">${esc(eta)}</div></div>
     <div class="sheet trip-sheet">
@@ -597,6 +598,7 @@ function renderFailed(s) {
 }
 function completedFromScreen(s) {
   const blocks = knownBlocks(s.blocks);
+  const types = new Set(blocks.map((b) => b.type));
   const hello = blocks.find((b) => b.type === "hello") || {};
   const trip = blocks.find((b) => b.type === "trip") || {};
   const cap = blocks.find((b) => b.type === "captain") || {};
@@ -604,11 +606,6 @@ function completedFromScreen(s) {
   const tipsBlock = blocks.find((b) => b.type === "tips") || {};
   const pay = blocks.find((b) => b.type === "cta" && b.style !== "secondary") || {};
   const alt = blocks.find((b) => b.type === "cta" && b.style === "secondary") || {};
-  const dir = String(s._direction || "B").toUpperCase().slice(0, 1);
-  const showRoute = s.showRoute != null ? s.showRoute : dir !== "A";
-  const showCaptain = s.showCaptain != null ? s.showCaptain : dir !== "A";
-  const showTips = s.showTips != null ? s.showTips : dir !== "A";
-  const showFeedback = s.showFeedback != null ? s.showFeedback : dir === "C";
   return {
     ...s,
     fare: moneyText(s.fare || hello.title, "AED 32.50"),
@@ -620,15 +617,15 @@ function completedFromScreen(s) {
     captain: s.captain || cap.name || "Yousef",
     car: s.car || cap.car || "White Toyota Camry",
     rating: s.rating || cap.rating || "4.9",
-    tips: (s.tips && s.tips.length ? s.tips : tipsBlock.items) || ["AED 5", "AED 10", "AED 15"],
+    tips: types.has("tips") ? s.tips || tipsBlock.items || [] : [],
     helper: s.helper || note.text || "",
-    ratePrompt: s.ratePrompt || (dir === "C" ? "How was your trip?" : dir === "B" ? "Rate your captain" : ""),
+    ratePrompt: types.has("note") ? "How was your trip?" : types.has("captain") ? "Rate your captain" : "",
     primary: s.primary || pay.text || "Done",
-    secondary: s.secondary || alt.text || (dir === "A" ? "" : "View receipt"),
-    showRoute,
-    showCaptain,
-    showTips,
-    showFeedback,
+    secondary: s.secondary || alt.text || "",
+    showRoute: types.has("trip"),
+    showCaptain: types.has("captain"),
+    showTips: types.has("tips"),
+    showFeedback: types.has("note"),
   };
 }
 
@@ -702,7 +699,7 @@ function renderFoodHome(raw) {
 function renderCheckout(s) {
   const items = cartRows(s.items);
   const slots = (s.slots || [s.slot || "Today · 6–8 pm"]).map(asLabel).filter((x) => x && !/choose|select|pick a slot/i.test(x));
-  const slotChips = slots.length ? slots : ["Today · 6–8 pm", "Tomorrow · 10–12"];
+  const slotChips = slots.length ? slots : [];
   const address = s.location || s.address || "Marina Walk, JLT";
   return device(
     `<div class="dash checkout">
@@ -712,8 +709,8 @@ function renderCheckout(s) {
       <div class="recent">${items.map((x) => `<div class="trip"><b>${esc(tx(x.t))}</b><span>${esc(x.s)}</span></div>`).join("")}</div>
       ${s.offer ? `<div class="food-offer">${esc(tx(s.offer))}</div>` : ""}
       ${s.helper ? `<div class="note-card">${esc(tx(s.helper))}</div>` : ""}
-      <p class="food-section">${tx("Delivery slot")}</p>
-      <div class="food-cats">${slotChips.map((slot, i) => `<span class="${i === 0 ? "on" : ""}">${esc(tx(slot))}</span>`).join("")}</div>
+      ${slotChips.length ? `<p class="food-section">${tx("Delivery slot")}</p>
+      <div class="food-cats">${slotChips.map((slot, i) => `<span class="${i === 0 ? "on" : ""}">${esc(tx(slot))}</span>`).join("")}</div>` : ""}
       <div class="totals">
         <div><span>${tx("Subtotal")}</span><b>${esc(s.sub || "")}</b></div>
         <div class="fee-line"><span>${tx("Delivery")}</span><b>${esc(s.fee || "")}</b></div>
@@ -986,8 +983,8 @@ function foodFromScreen(s) {
   const restBlocks = blocks.filter((b) => b.type === "restaurants");
   const tabs = blocks.find((b) => b.type === "tabs") || {};
   let items = restBlocks.flatMap((b) => b.items || []);
-  if (items.length < 2) items = s.restaurants || [];
-  if (items.length < 2) {
+  if (items.length < 1) items = s.restaurants || [];
+  if (items.length < 1) {
     const fb = fallbackBlocks("Food home").find((b) => b.type === "restaurants");
     items = (fb && fb.items) || [];
   }
@@ -998,8 +995,8 @@ function foodFromScreen(s) {
     ...s,
     location: s.location || loc.text || "Marina Walk, JBR",
     search: s.search || search.text || "Search restaurants or dishes",
-    categories: s.categories || cats.items || ["Burgers", "Healthy", "Arabic"],
-    offer: s.offer || offer.text || "30% off · First Food order",
+    categories: (s.categories && s.categories.length ? s.categories : cats.items) || ["Burgers", "Healthy", "Arabic"],
+    offer: s.offer || offer.text || "",
     helper: s.helper || note.text || "",
     restaurants: items,
     sections,
@@ -1024,7 +1021,7 @@ function checkoutFromScreen(s) {
     return hit ? moneyText(hit.value || hit.s, "") : "";
   };
   let items = cartRows(list.items || s.items);
-  if (items.length < 2) {
+  if (!items.length) {
     items = [
       { t: "Oat milk 1L", s: "AED 12" },
       { t: "Baby spinach", s: "AED 9" },
@@ -1042,8 +1039,8 @@ function checkoutFromScreen(s) {
     title: "Checkout",
     location: s.location || loc.text || "Marina Walk, JLT",
     items,
-    slots: slots.length ? slots : ["Today · 6–8 pm", "Tomorrow · 10–12"],
-    slot: slots[0] || "Today · 6–8 pm",
+    slots: slots.length ? slots : [],
+    slot: slots[0] || s.slot || "",
     offer: s.offer || offer.text || "",
     helper: s.helper || note.text || "",
     sub: moneyText(s.sub || row("Subtotal"), "AED 41"),
@@ -1051,7 +1048,7 @@ function checkoutFromScreen(s) {
     total: moneyText(s.total || row("Total"), "AED 50"),
     feeNote: s.feeNote || "Delivery fee · shown before you pay",
     primary: s.primary || pay.text || "Pay now",
-    secondary: s.secondary || alt.text || "Change slot",
+    secondary: s.secondary || alt.text || "",
   };
 }
 
@@ -1059,6 +1056,9 @@ function hydrateScreen(raw) {
   if (!raw || typeof raw !== "object") return { kind: "generic", label: "Careem", blocks: fallbackBlocks("Home") };
   const kind = raw.kind || inferKindFromText(`${raw.label || ""} ${state.brief.goal || ""}`) || "generic";
   let blocks = knownBlocks(raw.blocks);
+  if (raw._direction && blocks.length >= 2) {
+    return { ...raw, kind, blocks };
+  }
   const types = new Set(blocks.map((b) => b.type));
   const foodOk = kind === "food" && (types.has("restaurants") || (raw.restaurants && raw.restaurants.length));
   const listed =

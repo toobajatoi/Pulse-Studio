@@ -50,7 +50,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json(400, {"error": "Ask needs a question."})
                 return
             try:
-                self._json(200, converse(question, body.get("history") or [], body.get("dna") or {}))
+                self._json(200, converse(question, body.get("history") or [], body.get("dna") or {}, body.get("screen")))
             except Exception as exc:
                 self._json(500, {"error": str(exc)})
             return

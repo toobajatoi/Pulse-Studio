@@ -698,7 +698,7 @@ function renderFoodHome(raw) {
 }
 function renderCheckout(s) {
   const items = cartRows(s.items);
-  const slots = (s.slots || [s.slot || "Today · 6–8 pm"]).map(asLabel).filter((x) => x && !/choose|select|pick a slot/i.test(x));
+  const slots = (Array.isArray(s.slots) ? s.slots : []).map(asLabel).filter((x) => x && !/choose|select|pick a slot/i.test(x));
   const slotChips = slots.length ? slots : [];
   const address = s.location || s.address || "Marina Walk, JLT";
   return device(
@@ -1028,19 +1028,19 @@ function checkoutFromScreen(s) {
       { t: "Eggs · 12", s: "AED 20" },
     ];
   }
-  const slots = cartRows((cats.items || s.slots || []).map((x) => (typeof x === "string" ? { t: x } : x)))
-    .map((x) => x.t)
-    .filter((x) => !/choose|select|pick a slot/i.test(x));
-  const extraSlot = asLabel(s.slot);
-  if (extraSlot && !/choose|select|pick a slot/i.test(extraSlot) && !slots.includes(extraSlot)) slots.unshift(extraSlot);
+  const slots = cats.items
+    ? cartRows(cats.items.map((x) => (typeof x === "string" ? { t: x } : x)))
+        .map((x) => x.t)
+        .filter((x) => !/choose|select|pick a slot/i.test(x))
+    : [];
   return {
     ...s,
     store: s.store || hello.kicker || "Quik",
     title: "Checkout",
     location: s.location || loc.text || "Marina Walk, JLT",
     items,
-    slots: slots.length ? slots : [],
-    slot: slots[0] || s.slot || "",
+    slots,
+    slot: slots[0] || "",
     offer: s.offer || offer.text || "",
     helper: s.helper || note.text || "",
     sub: moneyText(s.sub || row("Subtotal"), "AED 41"),
@@ -1048,16 +1048,162 @@ function checkoutFromScreen(s) {
     total: moneyText(s.total || row("Total"), "AED 50"),
     feeNote: s.feeNote || "Delivery fee · shown before you pay",
     primary: s.primary || pay.text || "Pay now",
-    secondary: s.secondary || alt.text || "",
+    secondary: /slot/i.test(s.secondary || alt.text || "") && !slots.length ? "" : s.secondary || alt.text || "",
   };
+}
+
+function applyEdit(screen, command) {
+  if (!screen || !command) return { screen, reply: "", applied: false };
+  const q = String(command).trim();
+  const next = JSON.parse(JSON.stringify(screen));
+  let blocks = knownBlocks(next.blocks);
+  const removed = new Set(next._removed || []);
+  const change = q.match(/^\s*(?:please\s+)?(?:change|rename|replace|update)\s+(.+?)\s+to\s+(.+?)[.!]?\s*$/i);
+  if (change) {
+    const src = change[1].trim().replace(/^["']|["']$/g, "");
+    const dst = change[2].trim().replace(/^["']|["']$/g, "");
+    const re = new RegExp(src.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
+    let hit = false;
+    const swap = (value) => {
+      const text = String(value || "");
+      if (text.toLowerCase().includes(src.toLowerCase())) {
+        hit = true;
+        return text.replace(re, dst);
+      }
+      return value;
+    };
+    blocks = blocks.map((b) => {
+      const item = { ...b };
+      ["text", "title", "kicker", "primary", "secondary"].forEach((k) => {
+        if (item[k]) item[k] = swap(item[k]);
+      });
+      if (Array.isArray(item.items)) item.items = item.items.map((x) => (typeof x === "string" ? swap(x) : x));
+      return item;
+    });
+    ["primary", "secondary", "title", "store", "helper", "offer", "slot"].forEach((k) => {
+      if (next[k]) next[k] = swap(next[k]);
+    });
+    if (hit) {
+      next.blocks = blocks;
+      next._locked = true;
+      return { screen: next, reply: `Updated “${src}” to “${dst}”.`, applied: true };
+    }
+  }
+  const add = q.match(/^\s*(?:please\s+)?(?:add|show|include|put back|restore)\s+(?:a\s+|the\s+)?(.+?)[.!]?\s*$/i);
+  const takeOff = q.match(/^\s*(?:please\s+)?(?:remove|hide|delete|drop|clear|get rid of|take off|without)\s+(?:the\s+)?(.+?)(?:\s+from(?:\s+the)?\s+screen)?[.!]?\s*$/i);
+  const targetOf = (phrase) => {
+    const key = String(phrase || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+    const types = new Set();
+    const map = [
+      [["delivery slot", "slot picker", "time slot", "timeslot", "slots", "slot"], ["categories"]],
+      [["promo", "offer", "banner", "discount"], ["offer"]],
+      [["helper", "note", "hint", "guidance"], ["note"]],
+      [["cart", "cart items", "items", "order items"], ["list"]],
+      [["address", "location", "pin"], ["location"]],
+      [["search", "where to"], ["search"]],
+      [["map"], ["map"]],
+      [["captain", "driver"], ["captain"]],
+      [["tips", "tip chips", "tip"], ["tips"]],
+      [["stars", "rating"], ["rating"]],
+      [["route", "trip summary", "pickup", "drop off"], ["trip"]],
+      [["tabs", "tab bar"], ["tabs"]],
+      [["categories", "chips", "filters"], ["categories"]],
+    ];
+    map.forEach(([needles, mapped]) => {
+      if (needles.some((n) => key.includes(n))) mapped.forEach((t) => types.add(t));
+    });
+    return { types, key };
+  };
+  const blobOf = (b) =>
+    [b.type, b.text, b.title, b.kicker, ...(b.items || []), ...(b.rows || [])]
+      .map((x) => (typeof x === "object" && x ? Object.values(x).join(" ") : x))
+      .join(" ")
+      .toLowerCase();
+  const looksLikeSlots = (b) => b.type === "categories" && /today|tomorrow|\d\s*[-–]\s*\d|\bam\b|\bpm\b|slot/.test(blobOf(b));
+  if (takeOff) {
+    const { types, key } = targetOf(takeOff[1]);
+    const dropSlots = types.has("categories") && (key.includes("slot") || next.kind === "checkout" || blocks.some(looksLikeSlots));
+    const kept = [];
+    const dropped = [];
+    blocks.forEach((b) => {
+      const blob = blobOf(b);
+      let hit = types.has(b.type) || (dropSlots && looksLikeSlots(b));
+      if (key.length > 2 && key && blob.includes(key) && ["categories", "offer", "note", "cta", "pills", "tips", "location", "search"].includes(b.type)) hit = true;
+      if (b.type === "cta" && ((key.includes("slot") && blob.includes("slot")) || (key && blob.includes(key)))) hit = true;
+      if (hit) dropped.push(b.type);
+      else kept.push(b);
+    });
+    if (dropped.length || types.size) {
+      types.forEach((t) => removed.add(t));
+      dropped.forEach((t) => {
+        if (t && t !== "cta") removed.add(t);
+      });
+      next.blocks = kept;
+      if (dropSlots) {
+        removed.add("categories");
+        removed.add("slot");
+        next.slot = "";
+        next.slots = [];
+        next.categories = [];
+        if (/slot/i.test(next.secondary || "")) next.secondary = "";
+      }
+      if (types.has("list")) next.items = [];
+      if (types.has("offer")) next.offer = "";
+      if (types.has("note")) next.helper = "";
+      if (types.has("tips")) next.tips = [];
+      if (types.has("location")) next.location = "";
+      next._removed = [...removed];
+      next._locked = true;
+      return { screen: next, reply: `Removed ${key} from the canvas.`, applied: true };
+    }
+  }
+  if (add) {
+    const { types, key } = targetOf(add[1]);
+    if (types.size) {
+      types.forEach((t) => removed.delete(t));
+      removed.delete("slot");
+      const extra = fallbackBlocks(next.kind === "checkout" ? "Checkout" : next.label || next.kind || "Home").filter((b) => types.has(b.type));
+      const have = new Set(blocks.map((b) => b.type));
+      extra.forEach((b) => {
+        if (!have.has(b.type)) {
+          blocks.push(b);
+          have.add(b.type);
+        }
+      });
+      next.blocks = blocks;
+      next._removed = [...removed];
+      next._locked = true;
+      if (types.has("categories")) {
+        const cats = blocks.find((b) => b.type === "categories");
+        next.slots = (cats && cats.items) || [];
+        next.slot = next.slots[0] || "";
+      }
+      return { screen: next, reply: `Added ${key} back onto the canvas.`, applied: true };
+    }
+  }
+  if (/denser|tighter|more compact|compact layout/i.test(q)) {
+    state.dna.density = Math.max(8, (state.dna.density || 50) - 20);
+    next._locked = true;
+    return { screen: next, reply: "Tighter spacing on this screen.", applied: true };
+  }
+  if (/spacious|more space|roomier|less dense/i.test(q)) {
+    state.dna.density = Math.min(92, (state.dna.density || 50) + 20);
+    next._locked = true;
+    return { screen: next, reply: "More space on this screen.", applied: true };
+  }
+  return { screen: next, reply: "", applied: false };
 }
 
 function hydrateScreen(raw) {
   if (!raw || typeof raw !== "object") return { kind: "generic", label: "Careem", blocks: fallbackBlocks("Home") };
   const kind = raw.kind || inferKindFromText(`${raw.label || ""} ${state.brief.goal || ""}`) || "generic";
   let blocks = knownBlocks(raw.blocks);
-  if (raw._direction && blocks.length >= 2) {
-    return { ...raw, kind, blocks };
+  if ((raw._locked || (raw._removed && raw._removed.length) || raw._direction) && blocks.length >= 2) {
+    const banned = new Set(raw._removed || []);
+    return { ...raw, kind, blocks: blocks.filter((b) => !banned.has(b.type)) };
   }
   const types = new Set(blocks.map((b) => b.type));
   const foodOk = kind === "food" && (types.has("restaurants") || (raw.restaurants && raw.restaurants.length));
@@ -2362,13 +2508,23 @@ async function refine(q) {
   state.messages.push({ role: "user", text: q });
   const input = document.getElementById("askInput");
   if (input) input.value = "";
+  const local = applyEdit(state.screen, q);
+  if (local.applied) {
+    state.screen = hydrateScreen(local.screen);
+    if (state.screen) state.screen.rtl = state.lang === "ar";
+    state.reply = local.reply;
+    state.messages.push({ role: "studio", text: local.reply });
+    saveChat();
+    render();
+    return;
+  }
   setBusy(true, "Adapting the screen…");
   render();
   try {
     const res = await fetch("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: `${state.brief.goal}. ${q}`, dna: state.dna, history: state.messages.slice(-6) }),
+      body: JSON.stringify({ question: q, screen: state.screen, dna: state.dna, history: state.messages.slice(-6) }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Ask failed");

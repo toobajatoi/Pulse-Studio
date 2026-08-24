@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 
 from ask_engine import ask
 from llm_studio import design
@@ -638,16 +639,23 @@ def is_complete(screen: dict | None, kind: str = "") -> bool:
 def complete_screen(screen: dict, goal: str = "") -> dict:
     kind = infer_screen_kind(goal) or str(screen.get("kind") or "generic")
     screen = dict(screen or {})
+    if screen.get("_locked") or screen.get("_removed"):
+        banned = set(screen.get("_removed") or [])
+        screen["blocks"] = [
+            b for b in (screen.get("blocks") or []) if isinstance(b, dict) and b.get("type") not in banned
+        ]
+        return screen
     if screen.get("kind") in (None, "", "generic"):
         screen["kind"] = kind
     tmpl = ensure_blocks(prompt_screen(goal or screen.get("label") or "Careem"), goal)
     if is_complete(screen, kind):
         return screen
     have = _block_types(screen)
-    merged = [b for b in (screen.get("blocks") or []) if isinstance(b, dict)]
+    banned = set(screen.get("_removed") or [])
+    merged = [b for b in (screen.get("blocks") or []) if isinstance(b, dict) and b.get("type") not in banned]
     for block in tmpl.get("blocks") or []:
         t = block.get("type")
-        if t and t not in have:
+        if t and t not in have and t not in banned:
             merged.append(block)
             have.add(t)
     screen["blocks"] = merged
@@ -678,6 +686,10 @@ def complete_screen(screen: dict, goal: str = "") -> dict:
         "car",
         "rating",
     ):
+        if key in banned:
+            continue
+        if key in ("slot", "slots", "categories") and banned & {"slot", "categories"}:
+            continue
         if not screen.get(key) and tmpl.get(key):
             screen[key] = tmpl[key]
     return ensure_blocks(screen, goal)
@@ -1209,9 +1221,13 @@ def ensure_blocks(screen: dict, goal: str = "") -> dict:
     if kind and screen.get("kind") in (None, "", "generic"):
         screen["kind"] = kind
     screen["blocks"] = blocks
+    banned = set(screen.get("_removed") or [])
+    if banned:
+        screen["blocks"] = [b for b in blocks if b.get("type") not in banned]
+        return screen
     if len(blocks) >= 2 and is_complete(screen, kind or screen.get("kind") or ""):
         return screen
-    converted = _blocks_from_fields(screen)
+    converted = [b for b in _blocks_from_fields(screen) if b.get("type") not in banned]
     if converted:
         screen["blocks"] = converted
         if is_complete(screen, kind or screen.get("kind") or ""):
@@ -1273,11 +1289,233 @@ def _clean_screen(screen: dict, goal: str = "", brief: dict | None = None) -> di
     return ensure_blocks(screen, goal)
 
 
-def converse(question: str, history: list | None = None, dna: dict | None = None) -> dict:
+EDIT_REMOVE = re.compile(
+    r"^\s*(?:please\s+)?(?:remove|hide|delete|drop|clear|get rid of|take off|without)\s+(?:the\s+)?(.+?)(?:\s+from(?:\s+the)?\s+screen)?[.!]?\s*$",
+    re.I,
+)
+EDIT_ADD = re.compile(
+    r"^\s*(?:please\s+)?(?:add|show|include|put back|restore)\s+(?:a\s+|the\s+)?(.+?)[.!]?\s*$",
+    re.I,
+)
+EDIT_CHANGE = re.compile(
+    r"^\s*(?:please\s+)?(?:change|rename|replace|update)\s+(.+?)\s+to\s+(.+?)[.!]?\s*$",
+    re.I,
+)
+
+TARGET_TYPES = [
+    (("delivery slot", "slot picker", "time slot", "timeslot", "slots", "slot"), ("categories",)),
+    (("promo", "offer", "banner", "discount"), ("offer",)),
+    (("helper", "note", "hint", "guidance"), ("note",)),
+    (("cart", "cart items", "items", "order items"), ("list",)),
+    (("address", "location", "pin"), ("location",)),
+    (("search", "where to"), ("search",)),
+    (("map",), ("map",)),
+    (("captain", "driver"), ("captain",)),
+    (("tips", "tip chips", "tip"), ("tips",)),
+    (("stars", "rating"), ("rating",)),
+    (("route", "trip summary", "pickup", "drop-off", "drop off"), ("trip",)),
+    (("tabs", "tab bar"), ("tabs",)),
+    (("categories", "chips", "filters"), ("categories",)),
+]
+
+
+def _edit_target(phrase: str) -> tuple[set[str], str]:
+    raw = re.sub(r"^(the|a|an)\s+", "", (phrase or "").strip(), flags=re.I)
+    key = re.sub(r"[^a-z0-9]+", " ", raw.lower()).strip()
+    types: set[str] = set()
+    for needles, mapped in TARGET_TYPES:
+        if any(n in key for n in needles):
+            types.update(mapped)
+    return types, key
+
+
+def _block_blob(block: dict) -> str:
+    parts = [str(block.get("type") or ""), str(block.get("text") or ""), str(block.get("title") or ""), str(block.get("kicker") or "")]
+    for item in block.get("items") or block.get("rows") or []:
+        if isinstance(item, dict):
+            parts.extend(str(item.get(k) or "") for k in ("t", "s", "label", "value", "name", "text"))
+        else:
+            parts.append(str(item))
+    return " ".join(parts).lower()
+
+
+def _looks_like_slots(block: dict) -> bool:
+    if block.get("type") != "categories":
+        return False
+    blob = _block_blob(block)
+    return bool(re.search(r"today|tomorrow|\d\s*[-–]\s*\d|\bam\b|\bpm\b|slot", blob))
+
+
+def apply_edit(screen: dict, command: str) -> tuple[dict, str, bool]:
+    """Apply a designer command to the current canvas. Returns (screen, reply, applied)."""
+    screen = copy.deepcopy(screen or {})
+    q = str(command or "").strip()
+    if not q or not isinstance(screen, dict):
+        return screen, "", False
+    blocks = [dict(b) for b in (screen.get("blocks") or []) if isinstance(b, dict)]
+    removed = set(screen.get("_removed") or [])
+
+    change = EDIT_CHANGE.match(q)
+    if change:
+        src, dst = change.group(1).strip().strip("\"'"), change.group(2).strip().strip("\"'")
+        hit = False
+        for block in blocks:
+            for field in ("text", "title", "kicker", "primary", "secondary"):
+                if src.lower() in str(block.get(field) or "").lower():
+                    block[field] = re.sub(re.escape(src), dst, str(block[field]), flags=re.I)
+                    hit = True
+            items = block.get("items")
+            if isinstance(items, list):
+                nxt = []
+                for item in items:
+                    if isinstance(item, str) and src.lower() in item.lower():
+                        nxt.append(re.sub(re.escape(src), dst, item, flags=re.I))
+                        hit = True
+                    else:
+                        nxt.append(item)
+                block["items"] = nxt
+        for field in ("primary", "secondary", "title", "store", "helper", "offer", "slot"):
+            if src.lower() in str(screen.get(field) or "").lower():
+                screen[field] = re.sub(re.escape(src), dst, str(screen[field]), flags=re.I)
+                hit = True
+        if hit:
+            screen["blocks"] = blocks
+            screen["_locked"] = True
+            return screen, f"Updated “{src}” to “{dst}”.", True
+
+    add = EDIT_ADD.match(q)
+    if add:
+        types, key = _edit_target(add.group(1))
+        if types:
+            removed -= types
+            if "categories" in types:
+                removed.discard("slot")
+            screen["_removed"] = sorted(removed)
+            goal = screen.get("label") or str(screen.get("kind") or "Careem")
+            tmpl = ensure_blocks(prompt_screen(goal), goal)
+            extra = [b for b in (tmpl.get("blocks") or []) if isinstance(b, dict) and b.get("type") in types]
+            have = {b.get("type") for b in blocks}
+            for block in extra:
+                if block.get("type") not in have:
+                    blocks.append(block)
+                    have.add(block.get("type"))
+            screen["blocks"] = blocks
+            screen["_locked"] = True
+            if "categories" in types:
+                cats = next((b for b in blocks if b.get("type") == "categories"), None)
+                screen["slots"] = (cats or {}).get("items") or tmpl.get("slots") or []
+                screen["slot"] = (screen["slots"] or [tmpl.get("slot")])[0] if (screen["slots"] or tmpl.get("slot")) else ""
+            return screen, f"Added {key} back onto the canvas.", True
+
+    remove = EDIT_REMOVE.match(q) or (
+        re.match(r"^\s*(?:no|without)\s+(?:the\s+)?(.+?)[.!]?\s*$", q, re.I) if re.search(r"\b(slot|promo|offer|tip|map|helper|note|cart|address)\b", q, re.I) else None
+    )
+    if remove:
+        types, key = _edit_target(remove.group(1) if hasattr(remove, "group") else q)
+        kind = str(screen.get("kind") or "")
+        drop_slots = "categories" in types and (
+            "slot" in key or kind == "checkout" or any(_looks_like_slots(b) for b in blocks)
+        )
+        kept = []
+        dropped = []
+        for block in blocks:
+            blob = _block_blob(block)
+            type_hit = block.get("type") in types
+            if drop_slots and _looks_like_slots(block):
+                type_hit = True
+            text_hit = bool(key) and len(key) > 2 and key in blob and block.get("type") in {
+                "categories", "offer", "note", "cta", "pills", "tips", "location", "search"
+            }
+            cta_hit = block.get("type") == "cta" and (
+                ("slot" in key and "slot" in blob) or (key and key in blob)
+            )
+            if type_hit or text_hit or cta_hit:
+                dropped.append(block.get("type"))
+                continue
+            kept.append(block)
+        if dropped or types:
+            if types:
+                removed.update(types)
+            if drop_slots:
+                removed.update({"categories", "slot"})
+                screen["slot"] = ""
+                screen["slots"] = []
+                screen["categories"] = []
+                if re.search(r"slot", str(screen.get("secondary") or ""), re.I):
+                    screen["secondary"] = ""
+            for t in dropped:
+                if t and t != "cta":
+                    removed.add(t)
+            screen["blocks"] = kept
+            screen["_removed"] = sorted(removed)
+            screen["_locked"] = True
+            if "list" in types:
+                screen["items"] = []
+            if "offer" in types:
+                screen["offer"] = ""
+            if "note" in types:
+                screen["helper"] = ""
+            if "tips" in types:
+                screen["tips"] = []
+            if "location" in types:
+                screen["location"] = ""
+            return screen, f"Removed {key} from the canvas.", bool(dropped or types)
+    return screen, "", False
+
+
+def converse(question: str, history: list | None = None, dna: dict | None = None, screen: dict | None = None) -> dict:
+    current = screen if isinstance(screen, dict) else None
+    if current and (current.get("blocks") or current.get("kind")):
+        edited, reply, applied = apply_edit(current, question)
+        if applied:
+            return {
+                "reply": reply,
+                "intent": "edit",
+                "screen": edited,
+                "topic": "edit",
+                "confidence": 1,
+                "evidence": [],
+                "model": "studio-edit",
+                "design_system": None,
+                "critic": {"score": 92, "note": reply},
+                "choices": [],
+            }
     try:
-        data, model = design(question, history, dna)
-        screen = complete_screen(_clean_screen(data.get("screen") or {}, question), question)
-        if not _screen_usable(screen) or _looks_like_wrong_template(question, screen):
+        prompt = question
+        if current and (current.get("blocks") or current.get("kind")):
+            prompt = (
+                f"Edit this Careem screen. Command: {question}\n"
+                f"Keep the same kind and do not add back removed sections.\n"
+                f"Current screen JSON: {str(current)[:3500]}"
+            )
+        data, model = design(prompt, history, dna)
+        next_screen = _clean_screen(data.get("screen") or {}, question)
+        if current:
+            next_screen["_removed"] = list(current.get("_removed") or [])
+            next_screen["_locked"] = True
+            next_screen, _, _ = apply_edit(next_screen, question)
+            banned = set(next_screen.get("_removed") or [])
+            next_screen["blocks"] = [
+                b for b in (next_screen.get("blocks") or []) if isinstance(b, dict) and b.get("type") not in banned
+            ]
+        else:
+            next_screen = complete_screen(next_screen, question)
+        if not _screen_usable(next_screen) or _looks_like_wrong_template(question, next_screen):
+            if current:
+                edited, reply, applied = apply_edit(copy.deepcopy(current), question)
+                if applied:
+                    return {
+                        "reply": reply,
+                        "intent": "edit",
+                        "screen": edited,
+                        "topic": "edit",
+                        "confidence": 1,
+                        "evidence": [],
+                        "model": "studio-edit",
+                        "design_system": None,
+                        "critic": {"score": 90, "note": reply},
+                        "choices": [],
+                    }
             raise ValueError("Model returned an unusable screen")
         critic = data.get("critic") if isinstance(data.get("critic"), dict) else {}
         choices = data.get("choices") if isinstance(data.get("choices"), list) else []
@@ -1285,7 +1523,7 @@ def converse(question: str, history: list | None = None, dna: dict | None = None
         return {
             "reply": data.get("reply") or "Here is the screen.",
             "intent": data.get("intent") or "screen",
-            "screen": screen,
+            "screen": next_screen,
             "topic": data.get("intent") or "screen",
             "confidence": 0.9,
             "evidence": [],
@@ -1302,11 +1540,24 @@ def converse(question: str, history: list | None = None, dna: dict | None = None
             ][:3],
         }
     except Exception:
-        screen = ensure_blocks(prompt_screen(question), question)
+        if current:
+            return {
+                "reply": "I kept the current canvas. Try a more specific edit like “remove the promo” or “change Pay now to Place order”.",
+                "intent": "edit",
+                "screen": current,
+                "topic": "edit",
+                "confidence": 0.5,
+                "evidence": [],
+                "model": "studio-edit",
+                "design_system": None,
+                "critic": {"score": 80, "note": "Kept the live canvas instead of replacing it."},
+                "choices": [],
+            }
+        fallback = ensure_blocks(prompt_screen(question), question)
         return {
             "reply": "Here is a working screen for that step. Refine the copy or layout in the composer.",
             "intent": infer_screen_kind(question) or "screen",
-            "screen": screen,
+            "screen": fallback,
             "topic": infer_screen_kind(question) or "screen",
             "confidence": 0.6,
             "evidence": [],

@@ -113,7 +113,7 @@ async def app(scope, receive, send):
             if not question:
                 await _send_json(send, 400, {"error": "Ask needs a question."})
                 return
-            await _send_json(send, 200, converse(question, body.get("history") or [], body.get("dna") or {}))
+            await _send_json(send, 200, converse(question, body.get("history") or [], body.get("dna") or {}, body.get("screen")))
             return
         static = _static_file(path)
         if static and method == "GET":

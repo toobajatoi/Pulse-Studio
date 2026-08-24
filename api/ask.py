@@ -21,7 +21,7 @@ class handler(BaseHTTPRequestHandler):
             send_json(self, 400, {"error": "Ask needs a question."})
             return
         try:
-            send_json(self, 200, converse(question, body.get("history") or [], body.get("dna") or {}))
+            send_json(self, 200, converse(question, body.get("history") or [], body.get("dna") or {}, body.get("screen")))
         except Exception as exc:
             send_json(self, 500, {"error": str(exc)})
 

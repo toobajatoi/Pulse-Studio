@@ -76,6 +76,7 @@ Block types — compose ONLY what the brief needs (5-10 blocks typical):
 
 Hard rules:
 - items[] for pills/categories/tabs/tips is ALWAYS an array of strings. Never {name,icon} objects.
+- Food home MUST include location, search, categories (string chips), offer, and restaurants cards with name+rating+eta+from. Never use SearchField or RestaurantCard as a type name.
 - Super App home: hello, search "Where to?", pills ["Rides","Food","Quik","Pay","Shops","Plus","Bike","Box"], offer, list of recent places, tabs.
 - Food search: search, categories as filter chips (strings), restaurants cards with rating+ETA+price. Do not use pills-as-objects.
 - Ride completed: hello with fare, trip (pickup/dest/fare/duration/distance/method), captain, rating, tips, ONE cta "Done". No sheet. No Pay button on top of the fare.

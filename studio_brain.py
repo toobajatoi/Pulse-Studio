@@ -9,8 +9,12 @@ from screen_gen import (
     _clean_screen,
     _looks_like_wrong_template,
     _screen_usable,
+    apply_direction,
+    complete_screen,
+    direction_reply,
     ensure_blocks,
     infer_screen_kind,
+    is_complete,
     prompt_screen,
 )
 
@@ -240,10 +244,18 @@ def _direction_prompt(brief: dict, direction_id: str, combine: str | None = None
     label = combine or direction_id
     names = {"A": "Fastest", "B": "Informative", "C": "Guided"}
     hint = names.get(str(direction_id), direction_id)
+    variants = {
+        "A": "Fastest: fewer blocks, one promo or number above the fold, no extra helper.",
+        "B": "Informative: ratings, prices, fees, and context visible before the tap.",
+        "C": "Guided: add one helper note for first-time users. Still max 2 CTAs.",
+    }
     return (
         f"Project brief: {json.dumps(brief, ensure_ascii=False)}. "
-        f"Direction {label} ({hint}). "
+        f"Direction {label} ({hint}). {variants.get(str(direction_id), '')} "
+        f"This direction MUST look different from the other two. "
         f"Design the Careem screen as blocks[] plus design_system. "
+        f"Use only these block types: hello, location, search, pills, categories, offer, restaurants, list, map, sheet, captain, trip, note, totals, cta, tabs. "
+        f"Food home MUST include restaurants items with name, rating, eta, from. Never invent types like SearchField. "
         f"Careem DNA: {CAREEM_DNA['patterns']}. "
         f"Language: {brief.get('language') or 'EN'}. Write all UI copy in English unless language is AR. "
         f"Set rtl true only when language is AR. "
@@ -263,12 +275,14 @@ def _generate_with_llm(brief: dict, direction_id: str, combine: str | None, dna:
             data, model = design(text, [], dna)
             screen = _clean_screen(data.get("screen") or {}, _goal(brief), brief)
             if _screen_usable(screen) and not _looks_like_wrong_template(_goal(brief), screen):
+                screen = complete_screen(screen, _goal(brief))
                 ds = design_system_from_response(data, brief)
                 return screen, str(data.get("reply") or "Here is the screen."), model, ds
             errors.append("model returned an unusable screen")
         except Exception as exc:
             errors.append(str(exc))
     screen = ensure_blocks(prompt_screen(_goal(brief)), _goal(brief))
+    screen = complete_screen(screen, _goal(brief))
     return screen, "Here is a working screen from your brief. Refine it in the composer.", "studio-fallback", design_system_for(brief)
 
 
@@ -501,24 +515,23 @@ def tree_for(screen: dict) -> list[dict]:
 
 def start_project(brief: dict, dna: dict | None = None) -> dict:
     dirs = directions_for(brief)
-    previews = {}
+    goal = _goal(brief)
+    kind = infer_kind(brief)
     model = "studio-brain"
     ds = design_system_for(brief)
+    base = ensure_blocks(prompt_screen(goal), goal)
     try:
         data, model = design(_direction_prompt(brief, "B"), [], dna)
-        base = _clean_screen(data.get("screen") or {}, _goal(brief), brief)
-        if _screen_usable(base) and not _looks_like_wrong_template(_goal(brief), base):
+        llm_screen = _clean_screen(data.get("screen") or {}, goal, brief)
+        llm_screen = complete_screen(llm_screen, goal)
+        if _screen_usable(llm_screen) and is_complete(llm_screen, kind) and not _looks_like_wrong_template(goal, llm_screen):
+            base = llm_screen
             ds = design_system_from_response(data, brief)
-            for d in dirs:
-                previews[d["id"]] = {**base, "label": f"{base.get('label', 'Careem')} · {d['name']}"}
-        else:
-            raise ValueError("Preview generation returned an unusable screen")
     except Exception:
-        base = ensure_blocks(prompt_screen(_goal(brief)), _goal(brief))
-        for d in dirs:
-            previews[d["id"]] = {**base, "label": f"{base.get('label', 'Careem')} · {d['name']}"}
+        pass
+    previews = {d["id"]: apply_direction(base, d["id"], goal) for d in dirs}
     return {
-        "reply": "I read the brief and Careem DNA. Three directions — pick one, or combine A + C. Nothing ships until you choose.",
+        "reply": "I read the brief and Careem DNA. Three directions — Fastest, Informative, and Guided. Each one is a different layout of the same screen. Pick one.",
         "brief": brief,
         "careem_dna": CAREEM_DNA,
         "directions": dirs,
@@ -533,8 +546,13 @@ def start_project(brief: dict, dna: dict | None = None) -> dict:
 
 def pick_direction(brief: dict, direction_id: str, combine: str | None, dna: dict | None = None) -> dict:
     label = combine or direction_id
+    goal = _goal(brief)
+    kind = infer_kind(brief)
     screen, reply, model, ds = _generate_with_llm(brief, direction_id or "B", combine, dna)
+    screen = complete_screen(screen, goal)
+    screen = apply_direction(screen, direction_id or "B", goal)
     screen["label"] = screen.get("label") or f"Direction {label}"
+    reply = direction_reply(kind, direction_id or "B", reply)
     return {
         "reply": reply,
         "intent": f"direction_{label}",

@@ -398,7 +398,7 @@ function inferKindFromText(q) {
   if (/payment failed|try again|could not be processed/.test(t)) return "failed";
   if (/ride completed|ride complete|trip completed|trip complete|trip summary|final fare|rate your|rate the driver|leave a tip|optional tip|trip receipt|receipt screen|rating experience|how was your trip|ride finished/.test(t)) return "completed";
   if (/food cart|food checkout|restaurant cart|careem food cart/.test(t) || (/cart/.test(t) && /food|restaurant|burger|dish/.test(t))) return "food";
-  if (/food home|careem food home|discover what to eat|restaurant recommendation|food categor|popular dishes|restaurant cards|what to eat|search restaurants/.test(t)) return "food";
+  if (/food home|careem food home|discover what to eat|restaurant recommendation|food categor|popular dishes|restaurant cards|promo banner|what to eat|search restaurants|delivery location/.test(t)) return "food";
   if (/grocery|quik cart|quik checkout/.test(t) || (/checkout/.test(t) && /grocery|quik|slot/.test(t))) return "checkout";
   if (/monthly earnings|rider home|home dashboard/.test(t)) return "home";
   if (/cancel this ride|cancel ride screen|cancellation/.test(t) && !/arriv|accept ride|payment failed/.test(t)) return "cancel";
@@ -528,6 +528,7 @@ function renderArriving(raw) {
         <div class="price"><b>${esc(raw.plate || "")}</b><span>${t.plate}</span></div>
       </div>
       <p class="offer-hey">${esc(t.arriving(name, eta))}</p>
+      ${raw.helper ? `<p class="sheet-note">${esc(tx(raw.helper))}</p>` : ""}
       <div class="arrive-track"><i style="width:${progress}%"></i></div>
       <div class="stops">
         <div><i class="stop-dot"></i><div><small>${t.pickupPoint}</small><b>${esc(placeName(raw.pickup || "Dubai Mall, Financial Centre Rd"))}</b></div></div>
@@ -545,15 +546,21 @@ function renderArriving(raw) {
 function renderFailed(s) {
   const amount = s.fare || s.earned || s.amount || "AED 25.00";
   const method = s.method || s.card || "Visa **** 1234";
+  const rows = s.rows && s.rows.length ? s.rows : [
+    { label: "Trip amount", value: amount },
+    { label: "Pay", value: method },
+  ];
+  const helper = s.helper || s.note || "";
+  const sub = s.sub || "Payment could not be processed";
   return device(
     `<div class="dash failed">
       <div class="fail-mark">!</div>
       <div class="dash-name">${tx("Payment failed")}</div>
-      <p class="sheet-sub">${tx("Payment could not be processed")}</p>
+      <p class="sheet-sub">${tx(sub)}</p>
+      ${helper ? `<div class="note-card">${esc(tx(helper))}</div>` : ""}
       <div class="totals">
         <div class="grand"><span>${tx("Payment details")}</span></div>
-        <div><span>${tx("Trip amount")}</span><b>${esc(amount)}</b></div>
-        <div><span>${tx("Pay")}</span><b>${esc(tx(method))}</b></div>
+        ${rows.map((r) => `<div><span>${esc(tx(r.label || r.t || ""))}</span><b>${esc(tx(r.value || r.s || ""))}</b></div>`).join("")}
       </div>
       <button class="primary" type="button">${tx("Try Again")}</button>
       <button class="secondary" type="button">${tx("Change Payment")}</button>
@@ -807,7 +814,23 @@ const BLOCK_ALIASES = {
   searchfield: "search",
   whereto: "search",
   offerbanner: "offer",
+  promo: "offer",
+  promobanner: "offer",
+  banner: "offer",
   chiprow: "pills",
+  locationbar: "location",
+  locationchip: "location",
+  deliverylocation: "location",
+  categorychips: "categories",
+  categorychiprow: "categories",
+  filters: "categories",
+  restaurantcard: "restaurants",
+  restaurantlist: "restaurants",
+  restaurant: "restaurants",
+  restaurantsrow: "restaurants",
+  bottomstickycta: "cta",
+  stickycta: "cta",
+  stickybutton: "cta",
 };
 
 function canonicalBlockType(value) {
@@ -831,6 +854,8 @@ function fieldsFromBlocks(screen) {
   const trip = blocks.find((b) => b.type === "trip") || {};
   const sheet = blocks.find((b) => b.type === "sheet") || {};
   const hello = blocks.find((b) => b.type === "hello") || {};
+  const note = blocks.find((b) => b.type === "note") || {};
+  const totals = blocks.find((b) => b.type === "totals") || {};
   return {
     ...screen,
     captain: screen.captain || cap.name || "Yousef",
@@ -845,7 +870,40 @@ function fieldsFromBlocks(screen) {
     title: screen.title || hello.title || sheet.title,
     primary: screen.primary || sheet.primary,
     secondary: screen.secondary || sheet.secondary,
+    helper: screen.helper || note.text || "",
+    rows: screen.rows || totals.rows || totals.items,
     blocks,
+  };
+}
+
+function foodFromScreen(s) {
+  const blocks = knownBlocks(s.blocks);
+  const loc = blocks.find((b) => b.type === "location") || {};
+  const search = blocks.find((b) => b.type === "search") || {};
+  const cats = blocks.find((b) => b.type === "categories" || b.type === "pills") || {};
+  const offer = blocks.find((b) => b.type === "offer") || {};
+  const note = blocks.find((b) => b.type === "note") || {};
+  const restBlocks = blocks.filter((b) => b.type === "restaurants");
+  const tabs = blocks.find((b) => b.type === "tabs") || {};
+  let items = restBlocks.flatMap((b) => b.items || []);
+  if (items.length < 2) items = s.restaurants || [];
+  if (items.length < 2) {
+    const fb = fallbackBlocks("Food home").find((b) => b.type === "restaurants");
+    items = (fb && fb.items) || [];
+  }
+  const sections = restBlocks.length
+    ? restBlocks.map((b, i) => ({ title: b.title || (i ? "Popular near you" : "For you"), items: b.items || items }))
+    : [{ title: "For you", items }];
+  return {
+    ...s,
+    location: s.location || loc.text || "Marina Walk, JBR",
+    search: s.search || search.text || "Search restaurants or dishes",
+    categories: s.categories || cats.items || ["Burgers", "Healthy", "Arabic"],
+    offer: s.offer || offer.text || "30% off · First Food order",
+    helper: s.helper || note.text || "",
+    restaurants: items,
+    sections,
+    tabs: s.tabs || tabs.items || ["Food", "Search", "Orders", "You"],
   };
 }
 
@@ -853,9 +911,13 @@ function hydrateScreen(raw) {
   if (!raw || typeof raw !== "object") return { kind: "generic", label: "Careem", blocks: fallbackBlocks("Home") };
   const kind = raw.kind || inferKindFromText(`${raw.label || ""} ${state.brief.goal || ""}`) || "generic";
   let blocks = knownBlocks(raw.blocks);
-  if (blocks.length < 2) {
+  const types = new Set(blocks.map((b) => b.type));
+  const foodOk = kind === "food" && (types.has("restaurants") || (raw.restaurants && raw.restaurants.length));
+  const thin = blocks.length < 3 || (kind === "food" && !foodOk);
+  if (thin) {
     const converted = knownBlocks(blocksFromFields(raw));
-    blocks = converted.length >= 2 ? converted : fallbackBlocks(raw.label || kind || "Home");
+    const fallback = fallbackBlocks(raw.label || (kind === "food" ? "Food home" : kind) || "Home");
+    blocks = converted.length >= 3 && !(kind === "food" && !converted.some((b) => b.type === "restaurants")) ? converted : fallback;
   }
   return { ...raw, kind, blocks };
 }
@@ -865,11 +927,13 @@ function renderOne(s) {
   const screen = hydrateScreen(s);
   const kind = screenKind(screen);
   const merged = fieldsFromBlocks(screen);
+  if (kind === "food") return renderFoodHome(foodFromScreen(merged));
   if (kind === "arriving") return renderArriving(merged);
   if (kind === "accept") return renderAccept(merged);
   if (kind === "cancel") return renderCancel(merged);
   if (kind === "failed") return renderFailed(merged);
   if (kind === "completed") return renderCompleted(merged);
+  if (kind === "checkout") return renderCheckout(merged);
   if (merged.blocks && merged.blocks.length) return renderFromBlocks(merged);
   return renderFromBlocks({ ...merged, blocks: fallbackBlocks(merged.label || "Home") });
 }

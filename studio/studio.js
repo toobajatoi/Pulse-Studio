@@ -286,6 +286,11 @@ const AR_MAP = {
   Done: "تم",
   "View receipt": "عرض الإيصال",
   "Any feedback? (optional)": "ملاحظات؟ (اختياري)",
+  "How was your trip?": "كيف كان المشوار؟",
+  "Rate your captain": "قيّم الكابتن",
+  "Add a tip": "أضف بقشيش",
+  "Tip is optional. Your captain only sees it if you add one.": "البقشيش اختياري. الكابتن يشوفه فقط إذا أضفته.",
+  ETA: "الوصول",
   Checkout: "الدفع",
   Subtotal: "المجموع",
   Delivery: "التوصيل",
@@ -534,6 +539,9 @@ function renderArriving(raw) {
   const name = raw.captain || "Yousef";
   const eta = raw.eta || "3 min";
   const progress = Math.max(8, Math.min(100, Number(raw.progress) || 68));
+  const showProgress = raw.showProgress !== false;
+  const showPlate = raw.showPlate !== false;
+  const showPickup = raw.showPickup !== false;
   return device(
     `<div class="map"><div class="road"></div><div class="road b"></div><div class="pin a"></div><div class="pin b"></div><div class="fare">${esc(raw.fare || "")}</div><div class="eta-chip">${esc(eta)}</div></div>
     <div class="sheet trip-sheet">
@@ -543,14 +551,14 @@ function renderArriving(raw) {
           <span class="avatar">${esc(name[0])}</span>
           <div><b>${esc(name)}</b><small>★ ${esc(raw.rating || "4.9")} · ${esc(tx(raw.car || "White Toyota Camry"))}</small></div>
         </div>
-        <div class="price"><b>${esc(raw.plate || "")}</b><span>${t.plate}</span></div>
+        ${showPlate ? `<div class="price"><b>${esc(raw.plate || "")}</b><span>${t.plate}</span></div>` : `<div class="price"><b>${esc(eta)}</b><span>${tx("ETA")}</span></div>`}
       </div>
       <p class="offer-hey">${esc(t.arriving(name, eta))}</p>
       ${raw.helper ? `<p class="sheet-note">${esc(tx(raw.helper))}</p>` : ""}
-      <div class="arrive-track"><i style="width:${progress}%"></i></div>
-      <div class="stops">
+      ${showProgress ? `<div class="arrive-track"><i style="width:${progress}%"></i></div>` : ""}
+      ${showPickup ? `<div class="stops">
         <div><i class="stop-dot"></i><div><small>${t.pickupPoint}</small><b>${esc(placeName(raw.pickup || "Dubai Mall, Financial Centre Rd"))}</b></div></div>
-      </div>
+      </div>` : ""}
       <div class="offer-acts">
         <button class="primary" type="button">${t.call}</button>
         <button class="ghost" type="button">${t.message}</button>
@@ -587,27 +595,69 @@ function renderFailed(s) {
     screenRtl()
   );
 }
+function completedFromScreen(s) {
+  const blocks = knownBlocks(s.blocks);
+  const hello = blocks.find((b) => b.type === "hello") || {};
+  const trip = blocks.find((b) => b.type === "trip") || {};
+  const cap = blocks.find((b) => b.type === "captain") || {};
+  const note = blocks.find((b) => b.type === "note") || {};
+  const tipsBlock = blocks.find((b) => b.type === "tips") || {};
+  const pay = blocks.find((b) => b.type === "cta" && b.style !== "secondary") || {};
+  const alt = blocks.find((b) => b.type === "cta" && b.style === "secondary") || {};
+  const dir = String(s._direction || "B").toUpperCase().slice(0, 1);
+  const showRoute = s.showRoute != null ? s.showRoute : dir !== "A";
+  const showCaptain = s.showCaptain != null ? s.showCaptain : dir !== "A";
+  const showTips = s.showTips != null ? s.showTips : dir !== "A";
+  const showFeedback = s.showFeedback != null ? s.showFeedback : dir === "C";
+  return {
+    ...s,
+    fare: moneyText(s.fare || hello.title, "AED 32.50"),
+    duration: asLabel(s.duration || trip.duration) || "24 min",
+    distance: asLabel(s.distance || trip.distance) || "12.4 km",
+    pickup: s.pickup || trip.pickup || "Dubai Mall, Financial Centre Rd",
+    dest: s.dest || trip.dest || "Marina Walk, JBR",
+    method: s.method || trip.method || "Careem Pay",
+    captain: s.captain || cap.name || "Yousef",
+    car: s.car || cap.car || "White Toyota Camry",
+    rating: s.rating || cap.rating || "4.9",
+    tips: (s.tips && s.tips.length ? s.tips : tipsBlock.items) || ["AED 5", "AED 10", "AED 15"],
+    helper: s.helper || note.text || "",
+    ratePrompt: s.ratePrompt || (dir === "C" ? "How was your trip?" : dir === "B" ? "Rate your captain" : ""),
+    primary: s.primary || pay.text || "Done",
+    secondary: s.secondary || alt.text || (dir === "A" ? "" : "View receipt"),
+    showRoute,
+    showCaptain,
+    showTips,
+    showFeedback,
+  };
+}
+
 function renderCompleted(raw) {
-  const s = raw || {};
+  const s = completedFromScreen(raw || {});
   const tips = (s.tips || ["AED 5", "AED 10", "AED 15"]).slice(0, 3);
   const name = s.captain || "Yousef";
+  const t = loc();
   return device(
     `<div class="dash completed">
       <span class="dash-hello">${tx("Trip complete")}</span>
       <div class="dash-name">${esc(s.fare || "AED 32.50")}</div>
-      <p class="sheet-sub">${esc(s.duration || "24 min")} · ${esc(s.distance || "12.4 km")}</p>
-      <div class="totals compact">
-        <div><span>${loc().pickupPoint}</span><b>${esc(placeName(s.pickup || "Dubai Mall, Financial Centre Rd"))}</b></div>
-        <div><span>${loc().dropPoint}</span><b>${esc(placeName(s.dest || "Marina Walk, JBR"))}</b></div>
-        <div><span>${tx("Payment")}</span><b>${esc(tx(s.method || "Careem Pay"))}</b></div>
-      </div>
-      <div class="captain-row">
+      <p class="sheet-sub">${esc(s.duration || "24 min")}${s.showRoute ? ` · ${esc(s.distance || "12.4 km")}` : ""}</p>
+      ${s.helper ? `<div class="note-card">${esc(tx(s.helper))}</div>` : ""}
+      ${s.showRoute ? `<div class="route-card">
+        <div class="stops">
+          <div><i class="stop-dot"></i><div><small>${t.pickupPoint}</small><b>${esc(placeName(s.pickup))}</b></div></div>
+          <div><i class="stop-pin"></i><div><small>${t.dropPoint}</small><b>${esc(placeName(s.dest))}</b></div></div>
+        </div>
+      </div>` : ""}
+      ${s.showRoute ? `<div class="pay-row"><span>${tx("Payment")}</span><b>${esc(tx(s.method || "Careem Pay"))}</b></div>` : ""}
+      ${s.showCaptain ? `<div class="captain-row">
         <span class="avatar">${esc(name[0])}</span>
         <div><b>${esc(name)}</b><small>★ ${esc(s.rating || "4.9")} · ${esc(tx(s.car || "White Toyota Camry"))}</small></div>
-      </div>
+      </div>` : ""}
+      ${s.ratePrompt ? `<p class="rate-label">${tx(s.ratePrompt)}</p>` : ""}
       <div class="stars" aria-label="Rating"><span class="on">★</span><span class="on">★</span><span class="on">★</span><span class="on">★</span><span>★</span></div>
-      <div class="tip-row">${tips.map((tip, i) => `<button type="button" class="tip-chip${i === 1 ? " on" : ""}">${esc(tip)}</button>`).join("")}</div>
-      <input class="feedback" type="text" placeholder="${tx("Any feedback? (optional)")}" readonly />
+      ${s.showTips ? `${s.showFeedback ? `<p class="tip-caption">${tx("Add a tip")}</p>` : ""}<div class="tip-row">${tips.map((tip, i) => `<button type="button" class="tip-chip${i === 1 ? " on" : ""}">${esc(asLabel(tip))}</button>`).join("")}</div>` : ""}
+      ${s.showFeedback ? `<input class="feedback" type="text" placeholder="${tx("Any feedback? (optional)")}" readonly />` : ""}
       <button class="primary" type="button">${tx(s.primary || "Done")}</button>
       ${s.secondary ? `<button class="ghost full" type="button">${tx(s.secondary)}</button>` : ""}
     </div>`,
@@ -1778,8 +1828,9 @@ function inferBrief(goal) {
     if (/rent|rental|lease a car/.test(q)) return "Rent";
     if (/dineout|dine out|table booking/.test(q)) return "DineOut";
     if (/box|parcel|courier|send package/.test(q)) return "Box";
-    if (/pay|wallet|send money|payment failed|bill split/.test(q)) return "Pay";
-    if (/ride|driver arriving|cancel ride|where to/.test(q)) return "Rides";
+    if (/ride completed|trip complete|driver arriving|captain arriving|cancel ride|accept ride/.test(q)) return "Rides";
+    if (/payment failed|careem pay|\bwallet\b|send money|bill split/.test(q) && !/ride|trip complete|captain/.test(q)) return "Pay";
+    if (/ride|where to/.test(q)) return "Rides";
     return null;
   })();
   if (fromText) state.brief.product = fromText;
@@ -2042,7 +2093,9 @@ async function start(goal) {
 
 async function pick(id, combine) {
   if (state.thinking) return;
-  state.messages.push({ role: "user", text: `Use ${combine || id}` });
+  const dir = (state.directions || []).find((d) => d.id === id);
+  const label = combine === "A+C" ? "Fastest + Guided" : (dir && dir.name) || id;
+  state.messages.push({ role: "user", text: `Use ${label}` });
   state.view = "chat";
   setBusy(true, "Pulse is generating that direction…");
   render();

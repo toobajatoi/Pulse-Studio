@@ -612,7 +612,9 @@ def is_complete(screen: dict | None, kind: str = "") -> bool:
     if kind == "failed":
         return "cta" in types or bool(screen.get("primary"))
     if kind == "completed":
-        return bool(screen.get("fare")) or "trip" in types or "hello" in types
+        return bool(_money_text(screen.get("fare"))) and bool(
+            screen.get("pickup") or screen.get("dest") or screen.get("captain") or "trip" in types or "tips" in types
+        )
     if kind == "superapp":
         return "pills" in types and "search" in types
     if kind == "checkout":
@@ -668,6 +670,13 @@ def complete_screen(screen: dict, goal: str = "") -> dict:
         "primary",
         "store",
         "feeNote",
+        "pickup",
+        "dest",
+        "duration",
+        "distance",
+        "tips",
+        "car",
+        "rating",
     ):
         if not screen.get(key) and tmpl.get(key):
             screen[key] = tmpl[key]
@@ -776,16 +785,25 @@ def apply_direction(screen: dict, direction_id: str, goal: str = "") -> dict:
         return screen
 
     if kind == "arriving":
-        name = screen.get("captain") or "Yousef"
+        plate = screen.get("plate") or "D-17234"
         if did == "A":
             screen["helper"] = ""
             screen["eta"] = screen.get("eta") or "3 min"
             screen["secondary"] = "Message"
+            screen["showProgress"] = False
+            screen["showPlate"] = False
+            screen["showPickup"] = False
         elif did == "C":
-            screen["helper"] = f"Walk to the pin. Plate {screen.get('plate') or 'D-17234'}."
+            screen["helper"] = f"Walk to the pin. Plate {plate}."
             screen["eta"] = screen.get("eta") or "3 min"
+            screen["showProgress"] = True
+            screen["showPlate"] = True
+            screen["showPickup"] = True
         else:
             screen["helper"] = ""
+            screen["showProgress"] = True
+            screen["showPlate"] = True
+            screen["showPickup"] = True
         rebuilt = [b for b in blocks if b.get("type") in {"map", "captain", "trip", "sheet", "note"}]
         if not any(b.get("type") == "map" for b in rebuilt):
             rebuilt.insert(0, {"type": "map"})
@@ -871,6 +889,81 @@ def apply_direction(screen: dict, direction_id: str, goal: str = "") -> dict:
         screen["location"] = address
         return screen
 
+    if kind == "completed":
+        tmpl = completed_screen(goal)
+        fare = _money_text(screen.get("fare")) or tmpl.get("fare") or "AED 32.50"
+        pickup = screen.get("pickup") or tmpl.get("pickup")
+        dest = screen.get("dest") or tmpl.get("dest")
+        duration = screen.get("duration") or tmpl.get("duration") or "24 min"
+        distance = screen.get("distance") or tmpl.get("distance") or "12.4 km"
+        method = screen.get("method") or tmpl.get("method") or "Careem Pay"
+        name = screen.get("captain") or tmpl.get("captain") or "Yousef"
+        car = screen.get("car") or tmpl.get("car") or "White Toyota Camry"
+        rating = screen.get("rating") or tmpl.get("rating") or "4.9"
+        tips = list(screen.get("tips") or tmpl.get("tips") or ["AED 5", "AED 10", "AED 15"])
+        if did == "A":
+            show_route = show_captain = show_tips = show_feedback = False
+            helper = ""
+            rate_prompt = ""
+            keep_tips: list = []
+            secondary = ""
+        elif did == "C":
+            show_route = show_captain = show_tips = show_feedback = True
+            helper = "Tip is optional. Your captain only sees it if you add one."
+            rate_prompt = "How was your trip?"
+            keep_tips = tips[:3]
+            secondary = "View receipt"
+        else:
+            show_route = show_captain = show_tips = True
+            show_feedback = False
+            helper = ""
+            rate_prompt = "Rate your captain"
+            keep_tips = tips[:3]
+            secondary = "View receipt"
+        rebuilt = [{"type": "hello", "kicker": "Trip complete", "title": fare}]
+        if helper:
+            rebuilt.append({"type": "note", "text": helper})
+        if show_route:
+            rebuilt.append(
+                {
+                    "type": "trip",
+                    "pickup": pickup,
+                    "dest": dest,
+                    "fare": fare,
+                    "method": method,
+                    "duration": duration,
+                    "distance": distance,
+                }
+            )
+        if show_captain:
+            rebuilt.append({"type": "captain", "name": name, "rating": rating, "car": car})
+        rebuilt.append({"type": "rating", "value": 4})
+        if keep_tips:
+            rebuilt.append({"type": "tips", "items": keep_tips})
+        rebuilt.append({"type": "cta", "text": "Done"})
+        if secondary:
+            rebuilt.append({"type": "cta", "text": secondary, "style": "secondary"})
+        screen["blocks"] = rebuilt
+        screen["fare"] = fare
+        screen["pickup"] = pickup
+        screen["dest"] = dest
+        screen["duration"] = duration
+        screen["distance"] = distance
+        screen["method"] = method
+        screen["captain"] = name
+        screen["car"] = car
+        screen["rating"] = rating
+        screen["tips"] = keep_tips
+        screen["helper"] = helper
+        screen["ratePrompt"] = rate_prompt
+        screen["primary"] = "Done"
+        screen["secondary"] = secondary
+        screen["showRoute"] = show_route
+        screen["showCaptain"] = show_captain
+        screen["showTips"] = show_tips
+        screen["showFeedback"] = show_feedback
+        return screen
+
     return screen
 
 
@@ -901,6 +994,11 @@ def direction_reply(kind: str, direction_id: str, fallback: str = "") -> str:
             "A": "Fastest Quik checkout — cart, delivery fee, and Pay on one screen.",
             "B": "Informative checkout — slot, fee note, and item prices before the tap.",
             "C": "Guided checkout — a helper that the delivery fee is shown before Pay.",
+        },
+        "completed": {
+            "A": "Fastest trip complete — fare, stars, and Done. Tip stays off this screen.",
+            "B": "Informative trip complete — route, payment, captain, then rate and tip.",
+            "C": "Guided trip complete — a helper that tipping is optional, then rate, tip, and receipt.",
         },
     }
     return (table.get(kind) or {}).get(did) or fallback or "Here is that direction, generated from your brief."

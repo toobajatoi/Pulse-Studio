@@ -217,7 +217,15 @@ COMPONENT_MAP = {
 def design_system_from_response(data: dict, brief: dict) -> dict:
     ds = data.get("design_system")
     if isinstance(ds, dict) and ds.get("components"):
-        return {**ds, "kind": infer_kind(brief), "global": CAREEM_DNA}
+        kind = infer_kind(brief)
+        fallback = SCREEN_DESIGN_SYSTEM.get(kind) or {}
+        return {
+            **ds,
+            "kind": kind,
+            "name": fallback.get("name") or ds.get("name"),
+            "product": fallback.get("product") or brief.get("product") or ds.get("product"),
+            "global": CAREEM_DNA,
+        }
     screen = _clean_screen(data.get("screen") or {}, _goal(brief), brief)
     components = []
     for block in screen.get("blocks") or []:
@@ -228,7 +236,7 @@ def design_system_from_response(data: dict, brief: dict) -> dict:
     fallback = SCREEN_DESIGN_SYSTEM.get(infer_kind(brief), {})
     return {
         "name": (ds or {}).get("name") or fallback.get("name") or "Generated screen",
-        "product": brief.get("product") or fallback.get("product") or "Careem",
+        "product": fallback.get("product") or brief.get("product") or "Careem",
         "layout": (ds or {}).get("layout") or fallback.get("layout") or CAREEM_DNA["layout"],
         "tokens": (ds or {}).get("tokens") or fallback.get("tokens") or {"primary": "#00E784"},
         "typography": (ds or {}).get("typography") or fallback.get("typography") or {"body": CAREEM_DNA["type"]},

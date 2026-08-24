@@ -812,6 +812,10 @@ def _sync_fields_from_blocks(screen: dict) -> dict:
         screen["slots"] = cats.get("items")
         if cats.get("items"):
             screen["slot"] = cats["items"][0]
+    elif set(screen.get("_removed") or []) & {"slot", "categories"} or str(screen.get("kind") or "") == "checkout":
+        if "categories" not in {b.get("type") for b in blocks}:
+            screen["slots"] = []
+            screen["slot"] = ""
     if rests:
         screen["restaurants"] = [row for b in rests for row in (b.get("items") or [])]
         screen["sections"] = [{"title": b.get("title") or "For you", "items": b.get("items") or []} for b in rests]
@@ -1138,7 +1142,7 @@ def _blocks_from_fields(screen: dict) -> list[dict]:
                 rows.append({"t": row[0], "s": row[1] if len(row) > 1 else ""})
         if rows:
             built.append({"type": "list", "title": "Cart", "items": rows})
-    if screen.get("slot"):
+    if screen.get("slot") and "slot" not in set(screen.get("_removed") or []) and "categories" not in set(screen.get("_removed") or []):
         built.append({"type": "categories", "items": [screen["slot"]] if isinstance(screen["slot"], str) else screen.get("slots") or [screen["slot"]]})
     if screen.get("sub") or screen.get("fee") or screen.get("total"):
         built.append(
@@ -1222,8 +1226,14 @@ def ensure_blocks(screen: dict, goal: str = "") -> dict:
         screen["kind"] = kind
     screen["blocks"] = blocks
     banned = set(screen.get("_removed") or [])
-    if banned:
+    if screen.get("_locked") or banned:
         screen["blocks"] = [b for b in blocks if b.get("type") not in banned]
+        if banned & {"slot", "categories"}:
+            screen["slot"] = ""
+            screen["slots"] = []
+            screen["categories"] = []
+            if re.search(r"slot", str(screen.get("secondary") or ""), re.I):
+                screen["secondary"] = ""
         return screen
     if len(blocks) >= 2 and is_complete(screen, kind or screen.get("kind") or ""):
         return screen
@@ -1290,15 +1300,15 @@ def _clean_screen(screen: dict, goal: str = "", brief: dict | None = None) -> di
 
 
 EDIT_REMOVE = re.compile(
-    r"^\s*(?:please\s+)?(?:remove|hide|delete|drop|clear|get rid of|take off|without)\s+(?:the\s+)?(.+?)(?:\s+from(?:\s+the)?\s+screen)?[.!]?\s*$",
+    r"(?:remove|hide|delete|drop|clear|get rid of|take off|without|no more|don't show|do not show)\s+(?:the\s+|a\s+|an\s+)?(.+?)(?:\s+from\b.*)?\s*$",
     re.I,
 )
 EDIT_ADD = re.compile(
-    r"^\s*(?:please\s+)?(?:add|show|include|put back|restore)\s+(?:a\s+|the\s+)?(.+?)[.!]?\s*$",
+    r"(?:add|show|include|put back|restore)\s+(?:a\s+|the\s+)?(.+?)(?:\s+back)?\s*$",
     re.I,
 )
 EDIT_CHANGE = re.compile(
-    r"^\s*(?:please\s+)?(?:change|rename|replace|update)\s+(.+?)\s+to\s+(.+?)[.!]?\s*$",
+    r"(?:change|rename|replace|update|make)\s+(?:the\s+)?(.+?)\s+(?:to|say|read)\s+(.+?)\s*$",
     re.I,
 )
 
@@ -1322,6 +1332,8 @@ TARGET_TYPES = [
 def _edit_target(phrase: str) -> tuple[set[str], str]:
     raw = re.sub(r"^(the|a|an)\s+", "", (phrase or "").strip(), flags=re.I)
     key = re.sub(r"[^a-z0-9]+", " ", raw.lower()).strip()
+    key = re.sub(r"\b(from|the|a|an|please|screen|checkout|canvas|phone|preview|this|that)\b", " ", key)
+    key = re.sub(r"\s+", " ", key).strip()
     types: set[str] = set()
     for needles, mapped in TARGET_TYPES:
         if any(n in key for n in needles):
@@ -1346,6 +1358,25 @@ def _looks_like_slots(block: dict) -> bool:
     return bool(re.search(r"today|tomorrow|\d\s*[-–]\s*\d|\bam\b|\bpm\b|slot", blob))
 
 
+def _drop_slots(screen: dict, blocks: list, removed: set) -> list:
+    kept = [
+        b
+        for b in blocks
+        if not (
+            _looks_like_slots(b)
+            or (str(screen.get("kind") or "") == "checkout" and b.get("type") == "categories")
+            or (b.get("type") == "cta" and "slot" in _block_blob(b))
+        )
+    ]
+    removed.update({"categories", "slot"})
+    screen["slot"] = ""
+    screen["slots"] = []
+    screen["categories"] = []
+    if re.search(r"slot", str(screen.get("secondary") or ""), re.I):
+        screen["secondary"] = ""
+    return kept
+
+
 def apply_edit(screen: dict, command: str) -> tuple[dict, str, bool]:
     """Apply a designer command to the current canvas. Returns (screen, reply, applied)."""
     screen = copy.deepcopy(screen or {})
@@ -1353,11 +1384,18 @@ def apply_edit(screen: dict, command: str) -> tuple[dict, str, bool]:
     if not q or not isinstance(screen, dict):
         return screen, "", False
     blocks = [dict(b) for b in (screen.get("blocks") or []) if isinstance(b, dict)]
+    if not blocks:
+        blocks = [dict(b) for b in _blocks_from_fields(screen) if isinstance(b, dict)]
     removed = set(screen.get("_removed") or [])
+    wants_off = bool(
+        re.search(r"\b(remove|hide|delete|drop|clear|without|no more)\b", q, re.I)
+        or re.search(r"get rid of|take off|don't show|do not show", q, re.I)
+    )
 
-    change = EDIT_CHANGE.match(q)
+    change = EDIT_CHANGE.search(q)
     if change:
         src, dst = change.group(1).strip().strip("\"'"), change.group(2).strip().strip("\"'")
+        src = re.sub(r"^(button|cta|copy|label|text)\s+", "", src, flags=re.I)
         hit = False
         for block in blocks:
             for field in ("text", "title", "kicker", "primary", "secondary"):
@@ -1371,6 +1409,13 @@ def apply_edit(screen: dict, command: str) -> tuple[dict, str, bool]:
                     if isinstance(item, str) and src.lower() in item.lower():
                         nxt.append(re.sub(re.escape(src), dst, item, flags=re.I))
                         hit = True
+                    elif isinstance(item, dict):
+                        row = dict(item)
+                        for field in ("t", "s", "name", "text"):
+                            if src.lower() in str(row.get(field) or "").lower():
+                                row[field] = re.sub(re.escape(src), dst, str(row[field]), flags=re.I)
+                                hit = True
+                        nxt.append(row)
                     else:
                         nxt.append(item)
                 block["items"] = nxt
@@ -1383,7 +1428,14 @@ def apply_edit(screen: dict, command: str) -> tuple[dict, str, bool]:
             screen["_locked"] = True
             return screen, f"Updated “{src}” to “{dst}”.", True
 
-    add = EDIT_ADD.match(q)
+    if wants_off and re.search(r"\bslots?\b", q, re.I):
+        blocks = _drop_slots(screen, blocks, removed)
+        screen["blocks"] = blocks
+        screen["_removed"] = sorted(removed)
+        screen["_locked"] = True
+        return screen, "Removed delivery slot from the canvas.", True
+
+    add = None if wants_off else EDIT_ADD.search(q)
     if add:
         types, key = _edit_target(add.group(1))
         if types:
@@ -1407,9 +1459,7 @@ def apply_edit(screen: dict, command: str) -> tuple[dict, str, bool]:
                 screen["slot"] = (screen["slots"] or [tmpl.get("slot")])[0] if (screen["slots"] or tmpl.get("slot")) else ""
             return screen, f"Added {key} back onto the canvas.", True
 
-    remove = EDIT_REMOVE.match(q) or (
-        re.match(r"^\s*(?:no|without)\s+(?:the\s+)?(.+?)[.!]?\s*$", q, re.I) if re.search(r"\b(slot|promo|offer|tip|map|helper|note|cart|address)\b", q, re.I) else None
-    )
+    remove = EDIT_REMOVE.search(q) if wants_off else None
     if remove:
         types, key = _edit_target(remove.group(1) if hasattr(remove, "group") else q)
         kind = str(screen.get("kind") or "")
@@ -1437,12 +1487,7 @@ def apply_edit(screen: dict, command: str) -> tuple[dict, str, bool]:
             if types:
                 removed.update(types)
             if drop_slots:
-                removed.update({"categories", "slot"})
-                screen["slot"] = ""
-                screen["slots"] = []
-                screen["categories"] = []
-                if re.search(r"slot", str(screen.get("secondary") or ""), re.I):
-                    screen["secondary"] = ""
+                kept = _drop_slots(screen, kept, removed)
             for t in dropped:
                 if t and t != "cta":
                     removed.add(t)

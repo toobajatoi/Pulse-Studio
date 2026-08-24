@@ -676,7 +676,7 @@ function renderFoodCard(r) {
 function renderFoodHome(raw) {
   const s = raw || {};
   const sections = s.sections || [{ title: "For you", items: s.restaurants || [] }];
-  const cats = (s.categories || ["Burgers", "Healthy", "Arabic"]).slice(0, 6);
+  const cats = removedSet(s).has("categories") ? [] : (s.categories && s.categories.length ? s.categories : ["Burgers", "Healthy", "Arabic"]).slice(0, 6);
   return device(
     `<div class="dash food-home">
       <div class="food-loc"><span class="pin"></span>${esc(placeName(s.location || "Marina Walk, JBR"))}</div>
@@ -698,7 +698,7 @@ function renderFoodHome(raw) {
 }
 function renderCheckout(s) {
   const items = cartRows(s.items);
-  const slots = (Array.isArray(s.slots) ? s.slots : []).map(asLabel).filter((x) => x && !/choose|select|pick a slot/i.test(x));
+  const slots = slotsBanned(s) ? [] : (Array.isArray(s.slots) ? s.slots : []).map(asLabel).filter((x) => x && !/choose|select|pick a slot/i.test(x));
   const slotChips = slots.length ? slots : [];
   const address = s.location || s.address || "Marina Walk, JLT";
   return device(
@@ -929,6 +929,15 @@ function knownBlocks(list) {
     .filter((b) => KNOWN_BLOCKS.has(b.type));
 }
 
+function removedSet(s) {
+  return new Set((s && s._removed) || []);
+}
+
+function slotsBanned(s) {
+  const banned = removedSet(s);
+  return banned.has("slot") || banned.has("categories");
+}
+
 function fieldsFromBlocks(screen) {
   const blocks = knownBlocks(screen.blocks);
   const cap = blocks.find((b) => b.type === "captain") || {};
@@ -965,7 +974,7 @@ function fieldsFromBlocks(screen) {
     rows,
     items: screen.items || list.items,
     location: screen.location || loc.text,
-    slots: screen.slots || cats.items,
+    slots: slotsBanned(screen) ? [] : screen.slots || cats.items,
     sub: screen.sub || row("Subtotal"),
     fee: screen.fee || row("Delivery") || sheet.fee,
     total: screen.total || row("Total"),
@@ -995,7 +1004,9 @@ function foodFromScreen(s) {
     ...s,
     location: s.location || loc.text || "Marina Walk, JBR",
     search: s.search || search.text || "Search restaurants or dishes",
-    categories: (s.categories && s.categories.length ? s.categories : cats.items) || ["Burgers", "Healthy", "Arabic"],
+    categories: removedSet(s).has("categories")
+      ? []
+      : (s.categories && s.categories.length ? s.categories : cats.items) || ["Burgers", "Healthy", "Arabic"],
     offer: s.offer || offer.text || "",
     helper: s.helper || note.text || "",
     restaurants: items,
@@ -1020,19 +1031,24 @@ function checkoutFromScreen(s) {
     const hit = rows.find((r) => new RegExp(label, "i").test(String(r.label || r.t || "")));
     return hit ? moneyText(hit.value || hit.s, "") : "";
   };
+  const banned = removedSet(s);
   let items = cartRows(list.items || s.items);
-  if (!items.length) {
+  if (!items.length && !banned.has("list") && !s._locked) {
     items = [
       { t: "Oat milk 1L", s: "AED 12" },
       { t: "Baby spinach", s: "AED 9" },
       { t: "Eggs · 12", s: "AED 20" },
     ];
   }
-  const slots = cats.items
+  const hideSlots = slotsBanned(s);
+  const slots = hideSlots
+    ? []
+    : cats.items
     ? cartRows(cats.items.map((x) => (typeof x === "string" ? { t: x } : x)))
         .map((x) => x.t)
         .filter((x) => !/choose|select|pick a slot/i.test(x))
     : [];
+  const secondaryRaw = s.secondary || alt.text || "";
   return {
     ...s,
     store: s.store || hello.kicker || "Quik",
@@ -1041,14 +1057,14 @@ function checkoutFromScreen(s) {
     items,
     slots,
     slot: slots[0] || "",
-    offer: s.offer || offer.text || "",
-    helper: s.helper || note.text || "",
+    offer: banned.has("offer") ? "" : s.offer || offer.text || "",
+    helper: banned.has("note") ? "" : s.helper || note.text || "",
     sub: moneyText(s.sub || row("Subtotal"), "AED 41"),
     fee: moneyText(s.fee || row("Delivery"), "AED 9"),
     total: moneyText(s.total || row("Total"), "AED 50"),
     feeNote: s.feeNote || "Delivery fee · shown before you pay",
     primary: s.primary || pay.text || "Pay now",
-    secondary: /slot/i.test(s.secondary || alt.text || "") && !slots.length ? "" : s.secondary || alt.text || "",
+    secondary: hideSlots && /slot/i.test(secondaryRaw) ? "" : secondaryRaw,
   };
 }
 
@@ -1057,8 +1073,9 @@ function applyEdit(screen, command) {
   const q = String(command).trim();
   const next = JSON.parse(JSON.stringify(screen));
   let blocks = knownBlocks(next.blocks);
+  if (!blocks.length) blocks = knownBlocks(blocksFromFields({ ...next, blocks: [] }));
   const removed = new Set(next._removed || []);
-  const change = q.match(/^\s*(?:please\s+)?(?:change|rename|replace|update)\s+(.+?)\s+to\s+(.+?)[.!]?\s*$/i);
+  const change = q.match(/(?:change|rename|replace|update|make)\s+(?:the\s+)?(.+?)\s+(?:to|say|read)\s+(.+?)\s*[.!]?$/i);
   if (change) {
     const src = change[1].trim().replace(/^["']|["']$/g, "");
     const dst = change[2].trim().replace(/^["']|["']$/g, "");
@@ -1077,7 +1094,13 @@ function applyEdit(screen, command) {
       ["text", "title", "kicker", "primary", "secondary"].forEach((k) => {
         if (item[k]) item[k] = swap(item[k]);
       });
-      if (Array.isArray(item.items)) item.items = item.items.map((x) => (typeof x === "string" ? swap(x) : x));
+      if (Array.isArray(item.items)) {
+        item.items = item.items.map((x) => {
+          if (typeof x === "string") return swap(x);
+          if (x && typeof x === "object") return { ...x, t: swap(x.t), s: swap(x.s), name: swap(x.name), text: swap(x.text) };
+          return x;
+        });
+      }
       return item;
     });
     ["primary", "secondary", "title", "store", "helper", "offer", "slot"].forEach((k) => {
@@ -1089,12 +1112,17 @@ function applyEdit(screen, command) {
       return { screen: next, reply: `Updated “${src}” to “${dst}”.`, applied: true };
     }
   }
-  const add = q.match(/^\s*(?:please\s+)?(?:add|show|include|put back|restore)\s+(?:a\s+|the\s+)?(.+?)[.!]?\s*$/i);
-  const takeOff = q.match(/^\s*(?:please\s+)?(?:remove|hide|delete|drop|clear|get rid of|take off|without)\s+(?:the\s+)?(.+?)(?:\s+from(?:\s+the)?\s+screen)?[.!]?\s*$/i);
+  const wantsOff = /\b(remove|hide|delete|drop|clear|without|no more)\b/i.test(q) || /get rid of|take off|don't show|do not show/i.test(q);
+  const add = wantsOff ? null : q.match(/(?:add|show|include|put back|restore)\s+(?:a\s+|the\s+)?(.+?)(?:\s+back)?\s*[.!]?$/i);
+  const takeOff = wantsOff
+    ? q.match(/(?:remove|hide|delete|drop|clear|get rid of|take off|without|no more|don't show|do not show)\s+(?:the\s+|a\s+|an\s+)?(.+?)(?:\s+from\b.*)?$/i)
+    : null;
   const targetOf = (phrase) => {
     const key = String(phrase || "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(from|the|a|an|please|screen|checkout|canvas|phone|preview|this|that)\b/g, " ")
+      .replace(/\s+/g, " ")
       .trim();
     const types = new Set();
     const map = [
@@ -1123,6 +1151,19 @@ function applyEdit(screen, command) {
       .join(" ")
       .toLowerCase();
   const looksLikeSlots = (b) => b.type === "categories" && /today|tomorrow|\d\s*[-–]\s*\d|\bam\b|\bpm\b|slot/.test(blobOf(b));
+  if (wantsOff && /\bslots?\b/i.test(q)) {
+    blocks = blocks.filter((b) => !(looksLikeSlots(b) || (next.kind === "checkout" && b.type === "categories") || (b.type === "cta" && /slot/i.test(blobOf(b)))));
+    removed.add("categories");
+    removed.add("slot");
+    next.blocks = blocks;
+    next.slot = "";
+    next.slots = [];
+    next.categories = [];
+    if (/slot/i.test(next.secondary || "")) next.secondary = "";
+    next._removed = [...removed];
+    next._locked = true;
+    return { screen: next, reply: "Removed delivery slot from the canvas.", applied: true };
+  }
   if (takeOff) {
     const { types, key } = targetOf(takeOff[1]);
     const dropSlots = types.has("categories") && (key.includes("slot") || next.kind === "checkout" || blocks.some(looksLikeSlots));
@@ -1201,9 +1242,17 @@ function hydrateScreen(raw) {
   if (!raw || typeof raw !== "object") return { kind: "generic", label: "Careem", blocks: fallbackBlocks("Home") };
   const kind = raw.kind || inferKindFromText(`${raw.label || ""} ${state.brief.goal || ""}`) || "generic";
   let blocks = knownBlocks(raw.blocks);
-  if ((raw._locked || (raw._removed && raw._removed.length) || raw._direction) && blocks.length >= 2) {
-    const banned = new Set(raw._removed || []);
-    return { ...raw, kind, blocks: blocks.filter((b) => !banned.has(b.type)) };
+  const banned = new Set(raw._removed || []);
+  if (raw._locked || banned.size) {
+    const keep = blocks.filter((b) => {
+      if (banned.has(b.type)) return false;
+      if (slotsBanned(raw) && b.type === "categories") return false;
+      return true;
+    });
+    return { ...raw, kind, slot: slotsBanned(raw) ? "" : raw.slot, slots: slotsBanned(raw) ? [] : raw.slots, blocks: keep };
+  }
+  if (raw._direction && blocks.length >= 2) {
+    return { ...raw, kind, blocks };
   }
   const types = new Set(blocks.map((b) => b.type));
   const foodOk = kind === "food" && (types.has("restaurants") || (raw.restaurants && raw.restaurants.length));
@@ -1241,14 +1290,15 @@ function renderOne(s) {
 }
 function blocksFromFields(s) {
   const out = [];
+  const banned = removedSet(s);
   if (s.hello || s.title) out.push({ type: "hello", kicker: s.hello || s.store || "Careem", title: s.title || "Careem" });
-  if (s.location) out.push({ type: "location", text: s.location });
-  if (s.where || s.search) out.push({ type: "search", text: s.search || s.where });
-  if (Array.isArray(s.categories) && s.categories.length) out.push({ type: "categories", items: s.categories });
-  if (Array.isArray(s.items) && s.items.length && (s.kind === "checkout" || s.sub || s.total || s.slot)) {
+  if (s.location && !banned.has("location")) out.push({ type: "location", text: s.location });
+  if ((s.where || s.search) && !banned.has("search")) out.push({ type: "search", text: s.search || s.where });
+  if (!banned.has("categories") && Array.isArray(s.categories) && s.categories.length) out.push({ type: "categories", items: s.categories });
+  if (!banned.has("list") && Array.isArray(s.items) && s.items.length && (s.kind === "checkout" || s.sub || s.total || s.slot)) {
     out.push({ type: "list", title: "Cart", items: s.items });
   }
-  if (s.kind === "checkout" && (s.slot || (Array.isArray(s.slots) && s.slots.length))) {
+  if (!slotsBanned(s) && s.kind === "checkout" && (s.slot || (Array.isArray(s.slots) && s.slots.length))) {
     out.push({ type: "categories", items: s.slots || [s.slot] });
   }
   if (typeof s.offer === "string" && s.offer) out.push({ type: "offer", text: s.offer });
@@ -2511,8 +2561,12 @@ async function refine(q) {
   const local = applyEdit(state.screen, q);
   if (local.applied) {
     state.screen = hydrateScreen(local.screen);
-    if (state.screen) state.screen.rtl = state.lang === "ar";
+    if (state.screen) {
+      state.screen.rtl = state.lang === "ar";
+      if (state.flow && state.flow.here) state.flowScreens = { ...(state.flowScreens || {}), [state.flow.here]: state.screen };
+    }
     state.reply = local.reply;
+    state.view = "work";
     state.messages.push({ role: "studio", text: local.reply });
     saveChat();
     render();
@@ -2528,8 +2582,17 @@ async function refine(q) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Ask failed");
-    state.screen = hydrateScreen(data.screen || state.screen);
-    if (state.screen) state.screen.rtl = state.lang === "ar";
+    let next = hydrateScreen(data.screen || state.screen);
+    const again = applyEdit(next, q);
+    if (again.applied) {
+      next = hydrateScreen(again.screen);
+      data.reply = again.reply;
+    }
+    state.screen = next;
+    if (state.screen) {
+      state.screen.rtl = state.lang === "ar";
+      if (state.flow && state.flow.here) state.flowScreens = { ...(state.flowScreens || {}), [state.flow.here]: state.screen };
+    }
     if (data.design_system) state.designSystem = data.design_system;
     state.reply = data.reply;
     state.view = "work";
@@ -2547,7 +2610,7 @@ document.getElementById("ask").addEventListener("submit", (e) => {
   e.preventDefault();
   const q = document.getElementById("askInput").value.trim();
   if (!q) return;
-  if (state.view === "work" && state.screen) refine(q);
+  if (state.screen) refine(q);
   else start(q);
 });
 

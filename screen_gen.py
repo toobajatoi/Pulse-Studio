@@ -132,7 +132,7 @@ def detect(question: str, history: list | None = None) -> str:
     if kind == "food":
         return "food_home"
     if kind == "checkout":
-        return "food_home"
+        return "checkout"
     if kind == "superapp":
         return "superapp"
     if kind == "home":
@@ -378,24 +378,45 @@ def cancel_screen(question: str) -> dict:
 
 def checkout_screen(question: str) -> dict:
     mk = MARKETS[_market(question)]
+    items = [
+        {"t": "Oat milk 1L", "s": f"{mk['cur']} 12"},
+        {"t": "Baby spinach", "s": f"{mk['cur']} 9"},
+        {"t": "Eggs · 12", "s": f"{mk['cur']} 20"},
+    ]
+    slots = ["Today · 6–8 pm", "Tomorrow · 10–12"]
+    sub, fee, total = f"{mk['cur']} 41", f"{mk['cur']} 9", f"{mk['cur']} 50"
     return {
         "kind": "checkout",
         "title": "Checkout",
         "label": f"Checkout · {mk['city']}",
         "rtl": _rtl(question),
-        "store": "Spinneys · JLT",
-        "slot": "Today · 6–8 pm",
-        "items": [
-            {"t": "Oat milk 1L", "s": f"{mk['cur']} 12"},
-            {"t": "Baby spinach", "s": f"{mk['cur']} 9"},
-            {"t": "Eggs · 12", "s": f"{mk['cur']} 20"},
-        ],
-        "sub": f"{mk['cur']} 41",
-        "fee": f"{mk['cur']} 9",
+        "store": "Quik",
+        "location": "Marina Walk, JLT",
+        "slot": slots[0],
+        "slots": slots,
+        "items": items,
+        "sub": sub,
+        "fee": fee,
         "feeNote": "Delivery fee · shown before you pay",
-        "total": f"{mk['cur']} 50",
+        "total": total,
         "primary": "Pay now",
         "secondary": "Change slot",
+        "blocks": [
+            {"type": "hello", "kicker": "Quik", "title": "Checkout"},
+            {"type": "location", "text": "Marina Walk, JLT"},
+            {"type": "list", "title": "Cart", "items": items},
+            {"type": "categories", "items": slots},
+            {
+                "type": "totals",
+                "rows": [
+                    {"label": "Subtotal", "value": sub},
+                    {"label": "Delivery", "value": fee},
+                    {"label": "Total", "value": total},
+                ],
+            },
+            {"type": "cta", "text": "Pay now"},
+            {"type": "cta", "text": "Change slot", "style": "secondary"},
+        ],
     }
 
 
@@ -475,7 +496,9 @@ def _screen_usable(screen: dict | None) -> bool:
     if not isinstance(screen, dict) or not screen:
         return False
     kind = str(screen.get("kind") or "")
-    if kind in ("arriving", "accept", "cancel", "failed", "checkout", "completed", "food", "superapp"):
+    if kind == "checkout":
+        return is_complete(screen, kind)
+    if kind in ("arriving", "accept", "cancel", "failed", "completed", "food", "superapp"):
         return is_complete(screen, kind) or bool(
             screen.get("fare") or screen.get("captain") or screen.get("amount") or screen.get("restaurants")
         )
@@ -551,6 +574,31 @@ def _block_types(screen: dict) -> set[str]:
     return types
 
 
+def _money_text(value) -> str:
+    text = _as_label(value).strip()
+    if text.lower() in {"", "-", "—", "–", "n/a", "na", "choose a slot"}:
+        return ""
+    return text
+
+
+def _cart_rows(screen: dict) -> list:
+    rows = []
+    if isinstance(screen.get("items"), list):
+        rows.extend(screen["items"])
+    for block in screen.get("blocks") or []:
+        if isinstance(block, dict) and _block_type(block.get("type")) == "list":
+            rows.extend(block.get("items") or [])
+    filled = []
+    for row in rows:
+        if isinstance(row, dict):
+            label = _as_label(row.get("t") or row.get("name") or row.get("title") or row.get("label"))
+        else:
+            label = _as_label(row)
+        if label.strip():
+            filled.append(row)
+    return filled
+
+
 def is_complete(screen: dict | None, kind: str = "") -> bool:
     if not isinstance(screen, dict):
         return False
@@ -568,7 +616,20 @@ def is_complete(screen: dict | None, kind: str = "") -> bool:
     if kind == "superapp":
         return "pills" in types and "search" in types
     if kind == "checkout":
-        return "totals" in types or bool(screen.get("total"))
+        has_items = len(_cart_rows(screen)) >= 2
+        has_total = bool(
+            _money_text(screen.get("total")) or _money_text(screen.get("fee")) or _money_text(screen.get("sub"))
+        )
+        if not has_total:
+            for block in screen.get("blocks") or []:
+                if not isinstance(block, dict) or _block_type(block.get("type")) != "totals":
+                    continue
+                for row in block.get("rows") or block.get("items") or []:
+                    if isinstance(row, dict) and _money_text(row.get("value") or row.get("s")):
+                        has_total = True
+                        break
+        has_pay = "cta" in types or bool(_as_label(screen.get("primary")).strip())
+        return has_items and has_total and has_pay
     return len(types) >= 4
 
 
@@ -589,7 +650,25 @@ def complete_screen(screen: dict, goal: str = "") -> dict:
             have.add(t)
     screen["blocks"] = merged
     screen["kind"] = kind
-    for key in ("location", "search", "categories", "offer", "restaurants", "captain", "amount", "method", "fare"):
+    for key in (
+        "location",
+        "search",
+        "categories",
+        "offer",
+        "restaurants",
+        "captain",
+        "amount",
+        "method",
+        "fare",
+        "items",
+        "slot",
+        "sub",
+        "fee",
+        "total",
+        "primary",
+        "store",
+        "feeNote",
+    ):
         if not screen.get(key) and tmpl.get(key):
             screen[key] = tmpl[key]
     return ensure_blocks(screen, goal)
@@ -722,6 +801,76 @@ def apply_direction(screen: dict, direction_id: str, goal: str = "") -> dict:
             screen["blocks"] = superapp_home(goal).get("blocks") or screen["blocks"]
         return screen
 
+    if kind == "checkout":
+        tmpl = checkout_screen(goal)
+        items = _cart_rows(screen)
+        if len(items) < 2:
+            items = list(tmpl.get("items") or [])
+        loc = next((b for b in blocks if b.get("type") == "location"), None)
+        address = (loc or {}).get("text") or screen.get("location") or "Marina Walk, JLT"
+        offer = next((b for b in blocks if b.get("type") == "offer"), None)
+        if did == "A":
+            keep, slots, helper, promo = items[:2], ["Today · 6–8 pm"], "", ""
+            fee_note = "Delivery fee before Pay"
+        elif did == "C":
+            keep, slots, helper, promo = (
+                items[:3],
+                ["Today · 6–8 pm", "Tomorrow · 10–12", "Tomorrow · 6–8 pm"],
+                "Delivery fee is shown here before you tap Pay.",
+                "FOOD20 · AED 5 off",
+            )
+            fee_note = "AED 9 delivery · no surprise at Pay"
+        else:
+            keep, slots, helper, promo = (
+                items[:3],
+                ["Today · 6–8 pm", "Tomorrow · 10–12"],
+                "",
+                "Plus · free delivery over AED 40",
+            )
+            fee_note = "Delivery fee · shown before you pay"
+        sub = _money_text(screen.get("sub")) or tmpl.get("sub") or "AED 41"
+        fee = _money_text(screen.get("fee")) or tmpl.get("fee") or "AED 9"
+        total = _money_text(screen.get("total")) or tmpl.get("total") or "AED 50"
+        rebuilt = [
+            {"type": "hello", "kicker": screen.get("store") or "Quik", "title": "Checkout"},
+            {"type": "location", "text": address},
+            {"type": "list", "title": "Cart", "items": keep},
+            {"type": "categories", "items": slots},
+        ]
+        if promo:
+            rebuilt.append({"type": "offer", "text": promo})
+        if helper:
+            rebuilt.append({"type": "note", "text": helper})
+        rebuilt.extend(
+            [
+                {
+                    "type": "totals",
+                    "rows": [
+                        {"label": "Subtotal", "value": sub},
+                        {"label": "Delivery", "value": fee},
+                        {"label": "Total", "value": total},
+                    ],
+                },
+                {"type": "cta", "text": "Pay now"},
+                {"type": "cta", "text": "Change slot", "style": "secondary"},
+            ]
+        )
+        screen["blocks"] = rebuilt
+        screen["items"] = keep
+        screen["slot"] = slots[0]
+        screen["slots"] = slots
+        screen["sub"] = sub
+        screen["fee"] = fee
+        screen["total"] = total
+        screen["feeNote"] = fee_note
+        screen["helper"] = helper
+        screen["offer"] = promo or ((offer or {}).get("text") or "")
+        screen["store"] = screen.get("store") or "Quik"
+        screen["primary"] = "Pay now"
+        screen["secondary"] = "Change slot"
+        screen["location"] = address
+        return screen
+
     return screen
 
 
@@ -747,6 +896,11 @@ def direction_reply(kind: str, direction_id: str, fallback: str = "") -> str:
             "A": "Fastest Super App — Where to and the service grid above the fold.",
             "B": "Informative Super App — services, a promo, and recent places without hunting.",
             "C": "Guided Super App — new users see every Careem product and how to search.",
+        },
+        "checkout": {
+            "A": "Fastest Quik checkout — cart, delivery fee, and Pay on one screen.",
+            "B": "Informative checkout — slot, fee note, and item prices before the tap.",
+            "C": "Guided checkout — a helper that the delivery fee is shown before Pay.",
         },
     }
     return (table.get(kind) or {}).get(did) or fallback or "Here is that direction, generated from your brief."
@@ -854,7 +1008,15 @@ BLOCK_ALIASES = {
     "restaurantsrow": "restaurants",
     "bottomstickycta": "cta",
     "stickycta": "cta",
-    "stickybutton": "cta",
+    "cartlist": "list",
+    "cart": "list",
+    "cartitems": "list",
+    "orderitems": "list",
+    "slotpicker": "categories",
+    "timeslot": "categories",
+    "slots": "categories",
+    "deliveryaddress": "location",
+    "address": "location",
 }
 
 
@@ -883,7 +1045,7 @@ def normalize_blocks(screen: dict) -> dict:
             rows = []
             for x in b["items"]:
                 if isinstance(x, dict):
-                    rows.append({"t": _as_label(x.get("t") or x.get("name") or x.get("title")), "s": _as_label(x.get("s") or x.get("meta") or x.get("eta"))})
+                    rows.append({"t": _as_label(x.get("t") or x.get("name") or x.get("title")), "s": _as_label(x.get("s") or x.get("price") or x.get("value") or x.get("meta") or x.get("eta"))})
                 else:
                     rows.append({"t": _as_label(x), "s": ""})
             b["items"] = rows
@@ -997,30 +1159,56 @@ def _blocks_from_fields(screen: dict) -> list[dict]:
                     "plate": screen.get("plate") or "",
                 }
             )
-        if screen.get("pickup") or screen.get("dest") or screen.get("fare"):
-            built.append(
-                {
-                    "type": "trip",
-                    "pickup": screen.get("pickup"),
-                    "dest": screen.get("dest"),
-                    "fare": screen.get("fare") or screen.get("amount"),
-                    "method": screen.get("method"),
-                    "duration": screen.get("duration"),
-                    "distance": screen.get("distance"),
-                }
-            )
-        if kind in ("arriving", "accept", "cancel") or screen.get("primary"):
-            built.append(
-                {
-                    "type": "sheet",
-                    "title": screen.get("title") or ("Captain is arriving" if kind == "arriving" else "Confirm"),
-                    "sub": screen.get("eta") or screen.get("feeNote") or "",
-                    "fee": screen.get("fee"),
-                    "feeNote": screen.get("feeNote") or "",
-                    "primary": screen.get("primary") or "Continue",
-                    "secondary": screen.get("secondary") or "",
-                }
-            )
+    if screen.get("pickup") or screen.get("dest") or screen.get("fare"):
+        built.append(
+            {
+                "type": "trip",
+                "pickup": screen.get("pickup"),
+                "dest": screen.get("dest"),
+                "fare": screen.get("fare") or screen.get("amount"),
+                "method": screen.get("method"),
+                "duration": screen.get("duration"),
+                "distance": screen.get("distance"),
+            }
+        )
+    if isinstance(screen.get("items"), list) and screen["items"] and kind in ("checkout", "generic", ""):
+        rows = []
+        for row in screen["items"]:
+            if isinstance(row, dict):
+                rows.append({"t": row.get("t") or row.get("name"), "s": row.get("s") or row.get("price")})
+            elif isinstance(row, (list, tuple)):
+                rows.append({"t": row[0], "s": row[1] if len(row) > 1 else ""})
+        if rows:
+            built.append({"type": "list", "title": "Cart", "items": rows})
+    if screen.get("slot"):
+        built.append({"type": "categories", "items": [screen["slot"]] if isinstance(screen["slot"], str) else screen.get("slots") or [screen["slot"]]})
+    if screen.get("sub") or screen.get("fee") or screen.get("total"):
+        built.append(
+            {
+                "type": "totals",
+                "rows": [
+                    {"label": "Subtotal", "value": screen.get("sub") or ""},
+                    {"label": "Delivery", "value": screen.get("fee") or ""},
+                    {"label": "Total", "value": screen.get("total") or ""},
+                ],
+            }
+        )
+    if kind in ("arriving", "accept", "cancel"):
+        built.append(
+            {
+                "type": "sheet",
+                "title": screen.get("title") or ("Captain is arriving" if kind == "arriving" else "Confirm"),
+                "sub": screen.get("eta") or screen.get("feeNote") or "",
+                "fee": screen.get("fee"),
+                "feeNote": screen.get("feeNote") or "",
+                "primary": screen.get("primary") or "Continue",
+                "secondary": screen.get("secondary") or "",
+            }
+        )
+    elif kind == "checkout" and screen.get("primary"):
+        built.append({"type": "cta", "text": screen["primary"]})
+        if screen.get("secondary"):
+            built.append({"type": "cta", "text": screen["secondary"], "style": "secondary"})
     if kind == "failed" or (screen.get("amount") and screen.get("method") and not any(b.get("type") == "totals" for b in built)):
         built.append({"type": "hello", "kicker": "Payment", "title": screen.get("title") or "Payment failed"})
         built.append(
@@ -1069,13 +1257,17 @@ def ensure_blocks(screen: dict, goal: str = "") -> dict:
         item["type"] = _block_type(item.get("type") or item.get("name") or item.get("component"))
         if item["type"] in KNOWN_BLOCK_TYPES:
             blocks.append(item)
-    if len(blocks) >= 2:
-        screen["blocks"] = blocks
+    kind = infer_screen_kind(goal) if goal else str(screen.get("kind") or "generic")
+    if kind and screen.get("kind") in (None, "", "generic"):
+        screen["kind"] = kind
+    screen["blocks"] = blocks
+    if len(blocks) >= 2 and is_complete(screen, kind or screen.get("kind") or ""):
         return screen
     converted = _blocks_from_fields(screen)
-    if len(converted) >= 2:
+    if converted:
         screen["blocks"] = converted
-        return screen
+        if is_complete(screen, kind or screen.get("kind") or ""):
+            return screen
     kind = infer_screen_kind(goal) if goal else str(screen.get("kind") or "generic")
     builders = {
         "arriving": arriving_screen,
@@ -1095,6 +1287,10 @@ def ensure_blocks(screen: dict, goal: str = "") -> dict:
             screen["kind"] = tmpl.get("kind") or kind
             screen["label"] = screen.get("label") or tmpl.get("label") or "Careem"
             screen["blocks"] = fallback
+            for key, value in tmpl.items():
+                if key in ("blocks", "kind", "label") or screen.get(key):
+                    continue
+                screen[key] = value
             return screen
     screen["blocks"] = converted or [
         {"type": "hello", "kicker": "Careem", "title": screen.get("label") or "Home"},
@@ -1132,7 +1328,7 @@ def _clean_screen(screen: dict, goal: str = "", brief: dict | None = None) -> di
 def converse(question: str, history: list | None = None, dna: dict | None = None) -> dict:
     try:
         data, model = design(question, history, dna)
-        screen = _clean_screen(data.get("screen") or {}, question)
+        screen = complete_screen(_clean_screen(data.get("screen") or {}, question), question)
         if not _screen_usable(screen) or _looks_like_wrong_template(question, screen):
             raise ValueError("Model returned an unusable screen")
         critic = data.get("critic") if isinstance(data.get("critic"), dict) else {}

@@ -1117,6 +1117,7 @@ button, input, select, textarea { touch-action: manipulation; }
 .fee-line b { color: var(--forest); }
 .fee-note { margin: 0 0 8px; color: #137333; font-size: 11px; }
 .grand { padding-top: 8px; border-top: 1px solid #eee; font-size: 14px; }
+.dash.checkout .primary { position: sticky; bottom: 8px; z-index: 2; }
 .totals.compact { margin-top: 8px; }
 .totals.compact > div { margin-bottom: 8px; font-size: 12px; }
 .totals.compact span { color: var(--muted); display: block; font-size: 10px; }

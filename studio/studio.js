@@ -292,6 +292,7 @@ const AR_MAP = {
   Total: "الإجمالي",
   "Pay now": "ادفع الآن",
   "Change slot": "غيّر الوقت",
+  "Delivery slot": "وقت التوصيل",
   "Choose a slot": "اختَر وقت التوصيل",
   Home: "الرئيسية",
   Activity: "نشاط",
@@ -357,6 +358,23 @@ function asLabel(value) {
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (typeof value === "object") return value.label || value.name || value.text || value.title || value.t || value.value || "";
   return "";
+}
+function moneyText(value, fallback) {
+  const raw = asLabel(value).replace(/\s+/g, " ").trim();
+  if (!raw || /^[-—–]|^(n\/?a|choose a slot)$/i.test(raw)) return fallback || "";
+  return raw;
+}
+function cartRows(list) {
+  return (list || [])
+    .map((x) => {
+      if (Array.isArray(x)) return { t: asLabel(x[0]), s: asLabel(x[1]) };
+      if (!x || typeof x !== "object") return { t: asLabel(x), s: "" };
+      return {
+        t: asLabel(x.t || x.name || x.title || x.label || x.text),
+        s: asLabel(x.s || x.price || x.value || x.meta || x.right),
+      };
+    })
+    .filter((x) => x.t);
 }
 function tx(text) {
   if (text == null) return "";
@@ -632,20 +650,27 @@ function renderFoodHome(raw) {
   );
 }
 function renderCheckout(s) {
-  const items = asPairs(s.items, "t", "s");
+  const items = cartRows(s.items);
+  const slots = (s.slots || [s.slot || "Today · 6–8 pm"]).map(asLabel).filter((x) => x && !/choose|select|pick a slot/i.test(x));
+  const slotChips = slots.length ? slots : ["Today · 6–8 pm", "Tomorrow · 10–12"];
+  const address = s.location || s.address || "Marina Walk, JLT";
   return device(
     `<div class="dash checkout">
       <span class="dash-hello">${esc(tx(s.store || "Quik"))}</span>
       <div class="dash-name">${esc(tx(s.title || "Checkout"))}</div>
-      <div class="slot">${esc(tx(s.slot || "Choose a slot"))}</div>
+      <div class="food-loc"><span class="pin"></span>${esc(tx(address))}</div>
       <div class="recent">${items.map((x) => `<div class="trip"><b>${esc(tx(x.t))}</b><span>${esc(x.s)}</span></div>`).join("")}</div>
+      ${s.offer ? `<div class="food-offer">${esc(tx(s.offer))}</div>` : ""}
+      ${s.helper ? `<div class="note-card">${esc(tx(s.helper))}</div>` : ""}
+      <p class="food-section">${tx("Delivery slot")}</p>
+      <div class="food-cats">${slotChips.map((slot, i) => `<span class="${i === 0 ? "on" : ""}">${esc(tx(slot))}</span>`).join("")}</div>
       <div class="totals">
         <div><span>${tx("Subtotal")}</span><b>${esc(s.sub || "")}</b></div>
         <div class="fee-line"><span>${tx("Delivery")}</span><b>${esc(s.fee || "")}</b></div>
-        <p class="fee-note">${esc(tx(s.feeNote || ""))}</p>
+        <p class="fee-note">${esc(tx(s.feeNote || "Delivery fee · shown before you pay"))}</p>
         <div class="grand"><span>${tx("Total")}</span><b>${esc(s.total || "")}</b></div>
       </div>
-      ${s.primary ? `<button class="primary" type="button">${esc(tx(s.primary))}</button>` : ""}
+      <button class="primary" type="button">${esc(tx(s.primary || "Pay now"))}</button>
       ${s.secondary ? `<button class="secondary" type="button">${esc(tx(s.secondary))}</button>` : ""}
     </div>`,
     s.label,
@@ -831,6 +856,15 @@ const BLOCK_ALIASES = {
   bottomstickycta: "cta",
   stickycta: "cta",
   stickybutton: "cta",
+  cartlist: "list",
+  cart: "list",
+  cartitems: "list",
+  orderitems: "list",
+  slotpicker: "categories",
+  timeslot: "categories",
+  slots: "categories",
+  deliveryaddress: "location",
+  address: "location",
 };
 
 function canonicalBlockType(value) {
@@ -856,6 +890,16 @@ function fieldsFromBlocks(screen) {
   const hello = blocks.find((b) => b.type === "hello") || {};
   const note = blocks.find((b) => b.type === "note") || {};
   const totals = blocks.find((b) => b.type === "totals") || {};
+  const list = blocks.find((b) => b.type === "list") || {};
+  const loc = blocks.find((b) => b.type === "location") || {};
+  const cats = blocks.find((b) => b.type === "categories") || {};
+  const pay = blocks.find((b) => b.type === "cta" && b.style !== "secondary") || {};
+  const alt = blocks.find((b) => b.type === "cta" && b.style === "secondary") || {};
+  const rows = screen.rows || totals.rows || totals.items || [];
+  const row = (label) => {
+    const hit = (rows || []).find((r) => new RegExp(label, "i").test(String(r.label || r.t || "")));
+    return hit ? moneyText(hit.value || hit.s, "") : "";
+  };
   return {
     ...screen,
     captain: screen.captain || cap.name || "Yousef",
@@ -868,10 +912,16 @@ function fieldsFromBlocks(screen) {
     method: screen.method || trip.method,
     eta: screen.eta || sheet.sub || "3 min",
     title: screen.title || hello.title || sheet.title,
-    primary: screen.primary || sheet.primary,
-    secondary: screen.secondary || sheet.secondary,
+    primary: screen.primary || sheet.primary || pay.text,
+    secondary: screen.secondary || sheet.secondary || alt.text,
     helper: screen.helper || note.text || "",
-    rows: screen.rows || totals.rows || totals.items,
+    rows,
+    items: screen.items || list.items,
+    location: screen.location || loc.text,
+    slots: screen.slots || cats.items,
+    sub: screen.sub || row("Subtotal"),
+    fee: screen.fee || row("Delivery") || sheet.fee,
+    total: screen.total || row("Total"),
     blocks,
   };
 }
@@ -907,17 +957,73 @@ function foodFromScreen(s) {
   };
 }
 
+function checkoutFromScreen(s) {
+  const blocks = knownBlocks(s.blocks);
+  const hello = blocks.find((b) => b.type === "hello") || {};
+  const loc = blocks.find((b) => b.type === "location") || {};
+  const list = blocks.find((b) => b.type === "list") || {};
+  const cats = blocks.find((b) => b.type === "categories") || {};
+  const offer = blocks.find((b) => b.type === "offer") || {};
+  const note = blocks.find((b) => b.type === "note") || {};
+  const totals = blocks.find((b) => b.type === "totals") || {};
+  const pay = blocks.find((b) => b.type === "cta" && b.style !== "secondary") || {};
+  const alt = blocks.find((b) => b.type === "cta" && b.style === "secondary") || {};
+  const rows = totals.rows || totals.items || s.rows || [];
+  const row = (label) => {
+    const hit = rows.find((r) => new RegExp(label, "i").test(String(r.label || r.t || "")));
+    return hit ? moneyText(hit.value || hit.s, "") : "";
+  };
+  let items = cartRows(list.items || s.items);
+  if (items.length < 2) {
+    items = [
+      { t: "Oat milk 1L", s: "AED 12" },
+      { t: "Baby spinach", s: "AED 9" },
+      { t: "Eggs · 12", s: "AED 20" },
+    ];
+  }
+  const slots = cartRows((cats.items || s.slots || []).map((x) => (typeof x === "string" ? { t: x } : x)))
+    .map((x) => x.t)
+    .filter((x) => !/choose|select|pick a slot/i.test(x));
+  const extraSlot = asLabel(s.slot);
+  if (extraSlot && !/choose|select|pick a slot/i.test(extraSlot) && !slots.includes(extraSlot)) slots.unshift(extraSlot);
+  return {
+    ...s,
+    store: s.store || hello.kicker || "Quik",
+    title: "Checkout",
+    location: s.location || loc.text || "Marina Walk, JLT",
+    items,
+    slots: slots.length ? slots : ["Today · 6–8 pm", "Tomorrow · 10–12"],
+    slot: slots[0] || "Today · 6–8 pm",
+    offer: s.offer || offer.text || "",
+    helper: s.helper || note.text || "",
+    sub: moneyText(s.sub || row("Subtotal"), "AED 41"),
+    fee: moneyText(s.fee || row("Delivery"), "AED 9"),
+    total: moneyText(s.total || row("Total"), "AED 50"),
+    feeNote: s.feeNote || "Delivery fee · shown before you pay",
+    primary: s.primary || pay.text || "Pay now",
+    secondary: s.secondary || alt.text || "Change slot",
+  };
+}
+
 function hydrateScreen(raw) {
   if (!raw || typeof raw !== "object") return { kind: "generic", label: "Careem", blocks: fallbackBlocks("Home") };
   const kind = raw.kind || inferKindFromText(`${raw.label || ""} ${state.brief.goal || ""}`) || "generic";
   let blocks = knownBlocks(raw.blocks);
   const types = new Set(blocks.map((b) => b.type));
   const foodOk = kind === "food" && (types.has("restaurants") || (raw.restaurants && raw.restaurants.length));
-  const thin = blocks.length < 3 || (kind === "food" && !foodOk);
+  const listed =
+    cartRows(raw.items).length >= 2 || cartRows((blocks.find((b) => b.type === "list") || {}).items).length >= 2;
+  const checkoutOk = kind !== "checkout" || listed;
+  const thin = blocks.length < 3 || (kind === "food" && !foodOk) || (kind === "checkout" && !checkoutOk);
   if (thin) {
     const converted = knownBlocks(blocksFromFields(raw));
-    const fallback = fallbackBlocks(raw.label || (kind === "food" ? "Food home" : kind) || "Home");
-    blocks = converted.length >= 3 && !(kind === "food" && !converted.some((b) => b.type === "restaurants")) ? converted : fallback;
+    const fallbackStep = kind === "food" ? "Food home" : kind === "checkout" ? "Checkout" : raw.label || kind || "Home";
+    const fallback = fallbackBlocks(fallbackStep);
+    const convertedOk =
+      converted.length >= 3 &&
+      !(kind === "food" && !converted.some((b) => b.type === "restaurants")) &&
+      !(kind === "checkout" && !converted.some((b) => b.type === "list"));
+    blocks = convertedOk ? converted : fallback;
   }
   return { ...raw, kind, blocks };
 }
@@ -933,16 +1039,22 @@ function renderOne(s) {
   if (kind === "cancel") return renderCancel(merged);
   if (kind === "failed") return renderFailed(merged);
   if (kind === "completed") return renderCompleted(merged);
-  if (kind === "checkout") return renderCheckout(merged);
+  if (kind === "checkout") return renderCheckout(checkoutFromScreen(merged));
   if (merged.blocks && merged.blocks.length) return renderFromBlocks(merged);
   return renderFromBlocks({ ...merged, blocks: fallbackBlocks(merged.label || "Home") });
 }
 function blocksFromFields(s) {
   const out = [];
-  if (s.hello || s.title) out.push({ type: "hello", kicker: s.hello || "Careem", title: s.title || "Careem" });
+  if (s.hello || s.title) out.push({ type: "hello", kicker: s.hello || s.store || "Careem", title: s.title || "Careem" });
   if (s.location) out.push({ type: "location", text: s.location });
   if (s.where || s.search) out.push({ type: "search", text: s.search || s.where });
   if (Array.isArray(s.categories) && s.categories.length) out.push({ type: "categories", items: s.categories });
+  if (Array.isArray(s.items) && s.items.length && (s.kind === "checkout" || s.sub || s.total || s.slot)) {
+    out.push({ type: "list", title: "Cart", items: s.items });
+  }
+  if (s.kind === "checkout" && (s.slot || (Array.isArray(s.slots) && s.slots.length))) {
+    out.push({ type: "categories", items: s.slots || [s.slot] });
+  }
   if (typeof s.offer === "string" && s.offer) out.push({ type: "offer", text: s.offer });
   if (Array.isArray(s.sections)) {
     s.sections.forEach((sec) => {
@@ -955,7 +1067,23 @@ function blocksFromFields(s) {
   if (s.stats) out.push({ type: "stats", items: s.stats });
   if (s.captain) out.push({ type: "map" }, { type: "captain", name: s.captain, rating: s.rating || "4.9", car: s.car || "", plate: s.plate || "" });
   if (s.pickup || s.dest || s.fare) out.push({ type: "trip", pickup: s.pickup, dest: s.dest, fare: s.fare || s.amount, method: s.method });
-  if (s.primary) out.push({ type: "sheet", title: s.title || "Confirm", sub: s.eta || "", fee: s.fee, primary: s.primary, secondary: s.secondary || "" });
+  if (s.sub || s.fee || s.total) {
+    out.push({
+      type: "totals",
+      rows: [
+        { label: "Subtotal", value: s.sub || "" },
+        { label: "Delivery", value: s.fee || "" },
+        { label: "Total", value: s.total || "" },
+      ],
+    });
+  }
+  if (s.primary && s.kind !== "checkout" && s.kind !== "failed" && s.kind !== "completed" && s.kind !== "food") {
+    out.push({ type: "sheet", title: s.title || "Confirm", sub: s.eta || "", fee: s.fee, primary: s.primary, secondary: s.secondary || "" });
+  }
+  if (s.kind === "checkout" && s.primary) {
+    out.push({ type: "cta", text: s.primary });
+    if (s.secondary) out.push({ type: "cta", text: s.secondary, style: "secondary" });
+  }
   if (s.amount && s.method && !s.primary) {
     out.push({ type: "hello", kicker: "Payment", title: s.title || "Payment failed" });
     out.push({ type: "totals", rows: [{ label: "Trip amount", value: s.amount }, { label: "Card", value: s.method }] });
@@ -1275,9 +1403,12 @@ function fallbackBlocks(step) {
   if (kind === "checkout") {
     return [
       { type: "hello", kicker: product || "Quik", title: "Checkout" },
-      { type: "list", title: "Items", items: [{ t: "Milk 1L", s: "AED 8" }, { t: "Eggs 12", s: "AED 14" }] },
-      { type: "totals", rows: [{ label: "Delivery fee", value: "AED 9.00" }, { label: "Total", value: "AED 64.50" }] },
+      { type: "location", text: "Marina Walk, JLT" },
+      { type: "list", title: "Cart", items: [{ t: "Oat milk 1L", s: "AED 12" }, { t: "Baby spinach", s: "AED 9" }, { t: "Eggs · 12", s: "AED 20" }] },
+      { type: "categories", items: ["Today · 6–8 pm", "Tomorrow · 10–12"] },
+      { type: "totals", rows: [{ label: "Subtotal", value: "AED 41" }, { label: "Delivery", value: "AED 9" }, { label: "Total", value: "AED 50" }] },
       { type: "cta", text: "Pay now" },
+      { type: "cta", text: "Change slot", style: "secondary" },
     ];
   }
   if (kind === "arriving") {
